@@ -36,8 +36,8 @@ class TransferLayer(NeuronLayer):
   def __call__(self, values):
     return self.activate(self.weights.dot(self.previous(values)))
   
-  # to be called at the output layer only
-  def train(self, input, target, rate, shout=False):
+  def train(self, input, target, rate, shout=True):
+    # print('input', input, target, rate)
     # print('TRAINING', self.size)
     weighted = self.weights.dot(input)
     myOutput = self.activate(weighted)
@@ -48,12 +48,15 @@ class TransferLayer(NeuronLayer):
       error = self.next.train(myOutput, target, rate)
     # print('ADJUSTING', self.size)
     delta = self.inverse(weighted) * error
-    if shout: print(self.size, self.weights.flatten(), input, myOutput, target, delta, rate * delta[:,numpy.newaxis] * input[numpy.newaxis,:])
-    # print(error, delta, delta[:,numpy.newaxis] * input[numpy.newaxis,:])
+    # if shout:
+      # # print(self.weights)
+      # print(self.size, self.weights, input, myOutput, target, weighted, delta)
+      # # print(rate, delta, input, delta[:,numpy.newaxis], input[numpy.newaxis,:])
+      # print(rate * delta[:,numpy.newaxis] * input[numpy.newaxis,:])
     # adjust my weights
-    # print(self.weights)
+    # print(rate, weighted, delta, delta[:,numpy.newaxis], input[numpy.newaxis,:])
+    # raise RuntimeError
     self.weights += rate * delta[:,numpy.newaxis] * input[numpy.newaxis,:]
-    # print(self.weights)
     # backpropagate the error
     return delta.dot(self.weights)
   
@@ -118,6 +121,7 @@ class NeuralNetwork:
     return repr(self.output)
   
   def train(self, inputs, outputs, rate=0.01, maxiter=20):
+    # print('MAIN TRAINER', inputs.shape, outputs.shape)
     # rescale the inputs and outputs
     self.inpmax = inputs.max(axis=0)
     self.outmax = outputs.max()
@@ -126,7 +130,7 @@ class NeuralNetwork:
     # print(inp[:20], out[:20])
     for iter in xrange(maxiter):
       for i in xrange(len(outputs)):
-        self.input.train(inp[i], out[i], rate, shout=(i % 10 == 0))
+        self.input.train(inp[i], out[i], rate)#, shout=(i % 10 == 0))
     return self.get()
         # raise RuntimeError
   
@@ -150,11 +154,12 @@ if __name__ == '__main__':
   pl.plot(xs, ys, outputs, 'b.')
   fx = net.get()
   pl.plot(xs, ys, [float(fx(inputs[i])) for i in range(len(inputs))], 'r.')
+  print(inputs, outputs)
   for epoch in range(20):
     x = raw_input()
     pl.cla()
     net.train(inputs, outputs, maxiter=1)
-    print(net)
+    # print(net)
     fx = net.get()
     # for i in range(10):
       # print(inputs[i], fx(inputs[i]), outputs[i], (inputs[i] ** 2).sum())

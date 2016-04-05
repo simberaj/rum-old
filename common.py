@@ -28,6 +28,7 @@ ORIGIN_MARKER = 'O_' # field markers for od attributes of interactions
 DESTINATION_MARKER = 'D_'
 SHAPE_KEY = 'SHAPE' # auxiliary key for shape information
 SHAPE_TYPE = 'SHAPE'
+SHAPE_LENGTH_FLD = 'Shape_Area'
 SHAPE_AREA_FLD = 'Shape_Area'
 
 def checkFile(file):
@@ -130,8 +131,11 @@ def tableName(location, file, ext=DEFAULT_TABLE_EXT):
   else:
     return addTableExt(file, ext)
 
+def rasterPath(location, file, ext=''):
+  return addExt(os.path.join(location, file), ext)
+    
 def addExt(path, ext=DEFAULT_SPATIAL_EXT):
-  if not isInDatabase(path) and not hasExt(path):
+  if not isInDatabase(path) and not hasExt(path) and ext:
     return path + '.' + ext
   else:
     return path
@@ -182,7 +186,7 @@ def fieldList(layer, type=None):
 def listLayers(workspace):
   oldWSP = arcpy.env.workspace
   arcpy.env.workspace = workspace
-  lst = arcpy.ListFeatureClasses()
+  lst = arcpy.ListFeatureClasses() + arcpy.ListTables() + arcpy.ListRasters()
   # print('lyrlist', workspace, lst, arcpy.env.workspace)
   arcpy.env.workspace = oldWSP
   return lst
@@ -248,6 +252,9 @@ def toFeatureClass(layer):
   else:
     raise ValueError, 'cannot convert %s (type %s) to feature class' % (layer, desc.dataType, desc.dataElementType)
   
+def fcName(layer):
+  return os.path.splitext(os.path.basename(toFeatureClass(layer)))[0]
+  
 def selection(source, target, query):
   if hasGeometry(source):
     arcpy.MakeFeatureLayer_management(source, target, query)
@@ -270,7 +277,16 @@ def multiplyDistance(dist, mult):
   distNum, distUnit = dist.split()
   return str(int(float(distNum) * mult)) + ' ' + distUnit
   
-  
+def fieldMap(source, srcName, tgtName, mergeRule):
+  map = arcpy.FieldMap()
+  map.addInputField(source, srcName)
+  map.mergeRule = mergeRule
+  outFld = map.outputField
+  outFld.name = tgtName
+  outFld.alias = tgtName
+  map.outputField = outFld
+  return map
+
   
 def getSource(layer):
   desc = arcpy.Describe(layer)
@@ -403,18 +419,41 @@ def addFields(layer, names, types=None, typePattern=None, overwrite=True, append
 
 
 def clearFields(layer, exclude=[]):
+  excludeSafe = set(fld.lower() for fld in exclude)
   arcpyFldList = arcpy.ListFields(layer)
-  fldList = [field.name for field in arcpyFldList if not field.required and field.name not in exclude]
-  if len(arcpyFldList) - len(fldList) < 3: # just OID and Shape left...
-    addField(layer, 'tmp', int)
-  arcpy.DeleteField_management(layer, fldList)
+  # debug(exclude, [fld.name for fld in arcpyFldList])
+  fldList = [field.name for field in arcpyFldList if not field.required and field.name.lower() not in excludeSafe]
+  if fldList:
+    if len(arcpyFldList) - len(fldList) < 3: # just OID and Shape left...
+      addField(layer, 'tmp', int)
+    arcpy.DeleteField_management(layer, fldList)
+  
+def copyField(layer, fromFld, toFld):
+  fields = fieldTypeList(layer)
+  if toFld not in fields.keys():
+    if fromFld not in fields.keys():
+      raise ValueError, 'failed to copy field: source field {} does not exist'.format(fromFld)
+    addField(layer, toFld, inTypeToPy(fields[fromFld]))
+  arcpy.CalculateField_management(layer, toFld, '!{}!'.format(fromFld), 'PYTHON_9.3')
+
+def calcField(layer, fld, expr, type=None, prelogic=''):
+  if type:
+    addField(layer, fld, type)
+  arcpy.CalculateField_management(layer, fld, expr, 'PYTHON_9.3', prelogic)
+  
   
 def ensureIDField(layer):
   idFld = arcpy.Describe(layer).OIDFieldName
   if not idFld:
     raise ValueError, 'id field in ' + layer + ' missing'
   return idFld
-  
+
+def ensureShapeLengthField(layer, name=SHAPE_LENGTH_FLD):
+  name = fieldNameIn(layer, name)
+  if name not in fieldList(layer):
+    calcField(layer, name, '!shape.length!', float)
+  return name
+    
 def ensureShapeAreaField(layer):
   if SHAPE_AREA_FLD not in fieldList(layer):
     shpFld = addField(layer, SHAPE_AREA_FLD, float)
@@ -424,11 +463,14 @@ def ensureShapeAreaField(layer):
     return SHAPE_AREA_FLD
   
 def joinIDName(ofTable, inTable):
-  basic = 'FID_' + os.path.splitext(os.path.basename(ofTable))[0]
-  if not isInDatabase(inTable):
-    if len(basic) > 10:
-      basic = basic[:10]
-  return basic
+  return fieldNameIn(inTable, 'FID_' + os.path.splitext(os.path.basename(ofTable))[0])
+  
+def fieldNameIn(table, name):
+  if not isInDatabase(table):
+    if len(name) > 10:
+      name = name[:10]
+  return name
+  
   
 class runtool:
   def __init__(self, parcount=0, debug=None, overwrite=True):
@@ -447,6 +489,10 @@ class runtool:
   def __exit__(self, exc_type, exc_value, tb):
     if exc_type is not None:
       if debugMode:
+        # debug(exc_type)
+        # debug(exc_value)
+        # debug(tb)
+        # debug(traceback.format_exception(exc_type, exc_value, tb))
         debug('\n'.join(traceback.format_exception(exc_type, exc_value, tb)))
       else:
         arcpy.AddError(u'{} {}'.format(exc_type, exc_value))
@@ -549,7 +595,7 @@ class MessagingClass:
     self.messenger.done()
 
 class PathManager:
-  def __init__(self, outPath, delete=True, shout=True):
+  def __init__(self, outPath, delete=True, shout=True, forceDelete=False):
     self.outPath = outPath
     self.location = os.path.dirname(self.outPath)
     if not self.location: self.location = os.getcwd()
@@ -557,6 +603,10 @@ class PathManager:
     self.tmpCount = -1
     self.delete = delete
     self.shout = shout
+    self.tmpFiles = set()
+    self.tmpFields = {}
+    self.tmpSubfolders = []
+    self.forceDelete = forceDelete
   
   def __enter__(self):
     self.tmpFiles = set()
@@ -568,11 +618,27 @@ class PathManager:
   def tmpFile(self, delete=True, ext=None):
     tmp = self._tmpPath(ext=ext)
     if delete:
-      self.tmpFiles.add(tmp)
+      self.registerFile(tmp)
+    return tmp
+  
+  def tmpFC(self, delete=True, suffix=''):
+    tmp = featurePath(self.location, self._tmpName() + suffix)
+    if delete:
+      self.registerFile(tmp)
+    return tmp
+  
+  def tmpTable(self, delete=True, suffix=''):
+    tmp = tablePath(self.location, self._tmpName() + suffix)
+    if delete:
+      self.registerFile(tmp)
     return tmp
   
   def registerFile(self, file):
     self.tmpFiles.add(file)
+  
+  def registerField(self, layer, field):
+    if layer not in self.tmpFields: self.tmpFields[layer] = []
+    self.tmpFields[layer].append(field)
   
   def tmpFileName(self, delete=True):
     return os.path.basename(self.tmpFile(delete))
@@ -580,7 +646,7 @@ class PathManager:
   def tmpRaster(self, delete=True):
     tmp = os.path.join(self.location, self._tmpName())
     if delete:
-      self.tmpFiles.add(tmp)
+      self.registerFile(tmp)
     return tmp
   
   def tmpLayer(self):
@@ -601,9 +667,13 @@ class PathManager:
     name = self._tmpName().upper()
     arcpy.AddField_management(layer, name, pyTypeToOut(fldType))
     if delete:
-      if layer not in self.tmpFields: self.tmpFields[layer] = []
-      self.tmpFields[layer].append(name)
+      self.registerField(layer, name)
     return name
+  
+  def tmpIDField(self, layer, delete=True):
+    fld = self.tmpField(layer, int, delete=delete)
+    copyField(layer, ensureIDField(layer), fld)
+    return fld
     
   def _tmpName(self):
     self.tmpCount += 1
@@ -616,28 +686,34 @@ class PathManager:
   
   def __exit__(self, *args):
     if self.delete:
-      if self.tmpFiles:
-        if self.shout: progress('deleting temporary files')
-        for file in self.tmpFiles:
+      self.exit()
+  
+  def exit(self):
+    if self.tmpFiles:
+      if self.shout: progress('deleting temporary files')
+      for file in self.tmpFiles:
+        try:
+          arcpy.Delete_management(file)
+        except:
+          if self.forceDelete:
+            raise
+    if self.tmpFields:
+      if self.shout: progress('deleting temporary fields')
+      for layer in self.tmpFields:
+        if layer not in self.tmpFiles:
           try:
-            arcpy.Delete_management(file)
+            arcpy.DeleteField_management(layer, self.tmpFields[layer])
           except:
-            pass
-      if self.tmpFields:
-        if self.shout: progress('deleting temporary fields')
-        for layer in self.tmpFields:
-          if layer not in self.tmpFiles:
-            try:
-              arcpy.DeleteField_management(layer, self.tmpFields[layer])
-            except:
-              pass
-      if self.tmpSubfolders:
-        if self.shout: progress('deleting temporary folders')
-        for folder in self.tmpSubfolders:
-          try:
-            arcpy.Delete_management(folder)
-          except:
-            pass      
+            if self.forceDelete:
+              raise
+    if self.tmpSubfolders:
+      if self.shout: progress('deleting temporary folders')
+      for folder in self.tmpSubfolders:
+        try:
+          arcpy.Delete_management(folder)
+        except:
+          if self.forceDelete:
+            raise     
   
   def getLocation(self):
     return self.location

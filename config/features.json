@@ -1,0 +1,95 @@
+{
+"config" : "calculator",
+"layers" : {
+  "buildings" : {
+    "max_height" : 50,
+    "height_query" : "(height > 0 and height < {}) or floors <> 0",
+    "floor_height" : 3,
+    "floor_transfer_distance" : 50,
+    "sd" : 100
+  },
+  "poi" : {
+    "field" : "subtype",
+    "categories" : {
+      "cars" : ["maintenance", "parking"],
+      "pubtrn" : ["tram", "bus", "subway", "rail", "stop"], 
+      "shconv" : ["convenience"],
+      "shspec" : ["special"],
+      "restau" : ["restaurant"],
+      "recre" : ["sight", "entertainment", "sport"],
+      "living" : ["house", "flats", "residential"],
+      "accom" : ["accomodation", "longterm_accomodation"],
+      "work" : ["office", "industry", "agriculture", "transport"],
+      "public" : ["school", "health", "religion", "government"],
+      "military" : ["military"]},
+    "sd" : 100
+  },
+  "landuse" : {
+    "codes" : [111, 1121, 1122, 1123, 1124, 113, 121, 1221, 1223, 123, 124, 131, 133, 134, 141, 142, 2, 3, 5],
+    "code_field" : "CODE*",
+    "int_code_field" : "CODE_INT",
+    "resolution" : 50,
+    "sd" : 100
+  },
+  "transport" : {
+    "type_field" : "class",
+    "level_field" : "level",
+    "tolerance" : "2 Meters",
+    "builtup_buffer" : "20 Meters",
+    "landuse_code_field" : "CODE*",
+    "builtup_landuse_query" : "[{0}] LIKE '11%' OR [{0}] LIKE '121%'",
+    "speeds" : {
+      "0" : {
+        "cable_car" : 8,
+        "chair_lift" : 6,
+        "urbanrail" : 50,
+        "rail" : 80,
+        "subway" : 50,
+        "tram" : 30,
+        "motorway" : 75,
+        "primary" : 30,
+        "secondary" : 30,
+        "tertiary" : 30,
+        "unclassified" : 30,
+        "residential" : 20,
+        "living_street" : 20,
+        "service" : 20,
+        "link" : 20,
+        "bicycle" : 20,
+        "foot" : 4        
+      },
+      "1" : {
+        "cable_car" : 8,
+        "chair_lift" : 6,
+        "urbanrail" : 50,
+        "rail" : 60,
+        "subway" : 35,
+        "tram" : 20,
+        "motorway" : 115,
+        "primary" : 70,
+        "secondary" : 50,
+        "tertiary" : 30,
+        "unclassified" : 30,
+        "residential" : 20,
+        "living_street" : 20,
+        "service" : 20,
+        "link" : 20,
+        "bicycle" : 10,
+        "foot" : 4
+      }
+    }
+  },
+  "barrier" : {
+    "weight_field" : "repellence",
+    "cellsize" : 25,
+    "radius" : 50
+  },
+  "dem" : {
+    "smoothing" : 200
+  }
+},
+"minarea" : 2500,
+"maxarea" : 20000,
+"maxwagner" : 2.0,
+"direct_fields" : ["CODE*"]
+}

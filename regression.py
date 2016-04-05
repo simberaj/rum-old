@@ -1,22 +1,54 @@
+import neuro
+import common
+
 import numpy
 
-class Model:
-  def __init__(self):
+import cPickle
+import os
+
+class Model(object):
+  def __init__(self, name=''):
     self.features = []
     self.results = []
+    self.name = name + self.__class__.__name__[:-5] # strip Model, leave e.g. OLS
     self.trained = False
-    self.function = None
+    self.featureNames = []
+    self.coefs = None
+    # self.function = None
   
   def addExample(self, features, result):
     self.features.append(features)
     self.results.append(result)
   
+  def addDictExample(self, dict, valueFld):
+    self.addExample([dict[feat] for feat in self.featureNames], dict[valueFld])
+  
   def addExamples(self, features, results):
     self.features.extend(features)
     self.results.extend(results)
     
+  def setFeatureNames(self, names):
+    self.featureNames = names
+    self.checkFeatures()
+  
+  def featuresToList(self, featDict):
+    common.debug([featDict[featName] for featName in self.featureNames])
+    return [featDict[featName] for featName in self.featureNames]
+    
+  def getName(self):
+    return self.name
+    
   def train(self):
     pass
+  
+  def checkFeatures(self):
+    pass
+   
+  def serialize(self, file, keepData=False):
+    if not keepData:
+      self.features = []
+      self.results = []
+    cPickle.dump(self, open(file, 'w'))
   
   def report(self):
     return self.check(self.features, self.results)
@@ -46,7 +78,7 @@ class Model:
   
   def get(self):
     if self.trained:
-      return self.function
+      return self.getFunction()
     else:
       raise RuntimeError, 'model not yet trained'
   
@@ -68,13 +100,35 @@ class Model:
   
   def _prepareTargets(self):
     return numpy.matrix(self.results).reshape(len(self.results), 1)
+  
+  @staticmethod
+  def deserialize(file):
+    with open(file) as fileobj:
+      return cPickle.load(fileobj)
 
 class OLSModel(Model):
   def _train(self, input, train):
     unknowns = list(numpy.asarray(self.solve(input, train)).flatten())
     self.coefs, self.absolute = self._unknownsToCoefs(unknowns)
-    self.function = lambda row: numpy.array(row).dot(self.coefs) + self.absolute
     self.trained = True
+    # common.debug(len(self.featureNames), len(self.coefs))
+    # common.debug([(self.featureNames[i], self.coefs[i]) for i in range(len(self.coefs))])
+    common.debug(self.coefs)
+    common.debug(self.featureNames)
+    common.debug(self.absolute)
+
+    
+  def checkFeatures(self):
+    if self.coefs and len(self.featureNames) != len(self.coefs):
+      raise ValueError, 'feature count ({}) does not match trained model coefficients ({})'.format(len(self.featureNames), len(self.coefs))
+    
+  def getFunction(self):
+    coefs = numpy.array(self.coefs)
+    # def fx(row):
+      # common.debug('row len', len(row))
+      # return coefs.dot(row) + self.absolute
+    return lambda row: coefs.dot(row) + self.absolute
+    # return fx
   
   @staticmethod
   def solve(input, train):
@@ -86,6 +140,7 @@ class OLSModel(Model):
       unknowns.insert(i, 0.0)
     return unknowns[:-1], unknowns[-1]
 
+    
 class ARDModel(OLSModel):
   ALPHA_0 = 1e-10
   MAX_ITER = 100
@@ -132,9 +187,13 @@ class ANNMLPModel(Model):
   def _train(self, feats, tgts, epochs=100, mindiff=1e-3):
     feats = numpy.asarray(feats)
     featCount = len(feats[0])
-    net = self._createNet(featCount)
-    net.train(feats, tgts, maxiter=epochs)
-    infx = net.get()
+    self.net = self._createNet(featCount)
+    # print('inmodel', tgts.shape, numpy.asarray(tgts).flatten().shape)
+    self.net.train(numpy.asarray(feats), numpy.asarray(tgts).flatten(), maxiter=epochs)
+    self.trained = True
+    
+  def getFunction(self):
+    infx = self.net.get()
     return lambda row: infx(row + [1])
     # from pybrain.datasets import SupervisedDataSet
     # from pybrain.supervised.trainers import BackpropTrainer
@@ -157,8 +216,7 @@ class ANNMLPModel(Model):
     # self.trained = True
   
   def _createNet(self, featCount):
-    import neuro
-    net = neuro.NeuralNetwork([neuro.InputLayer(featCount), neuro.SoftplusLayer(self.INLAYER_COEF * featCount), neuro.SoftplusLayer(1)])
+    net = neuro.NeuralNetwork([neuro.InputLayer(featCount), neuro.TanhLayer(self.INLAYER_COEF * featCount), neuro.TanhLayer(1)])
     return net
     # import pybrain
     # from pybrain.structure import FeedForwardNetwork, LinearLayer, SigmoidLayer, FullConnection
@@ -179,7 +237,130 @@ class ANNMLPModel(Model):
     # net.addConnection(hidden_to_out)
     # net.sortModules()
     # return net
+   
+MODELS = {'OLS' : OLSModel, 'ARD' : ARDModel, 'ANN' : ANNMLPModel}   
     
+def create(modelType):
+  try:
+    return MODELS[modelType]()
+  except KeyError:
+    raise KeyError, 'model type {} not found'.format(modelType)
+    
+def load(modelFile):
+  return Model.deserialize(modelFile)
+    
+def validate(data, modelkey, realkey, outfile=None, shapekey=None):
+  vdtor = Validator.fromDict(data, modelkey, realkey, shapekey)
+  vdtor.validate()
+  if outfile:
+    vdtor.output(outfile)
+  
+class Validator:
+  TEMPLATE_FILE = 'report.html'
+  ERRAGG_NAMES = [
+    ('mismatch', 'Absolute value sum difference'),
+    ('tae', 'Total absolute error (TAE)'),
+    ('rtae', 'Relative total absolute error'),
+    ('r2', 'Coefficient of determination (R<sup>2</sup>)')]
+  DESC_NAMES = [
+    ('set', 'Dataset'),
+    ('sum', 'Sum'),
+    ('min', 'Minimum'),
+    ('q2l', 'Q2,5'),
+    ('q10', 'Q10 - 1st Decile'),
+    ('q25', 'Q25 - 1st Quartile'),
+    ('median', 'Q50 - Median'),
+    ('mean', 'Mean'),
+    ('q75', 'Q75 - 3rd Quartile'),
+    ('q90', 'Q90 - 9th Decile'),
+    ('q2h', 'Q97,5'),
+    ('max', 'Maximum')]
+  FORMATS = {'mismatch' : '{:g}', 'tae' : '{:.0f}', 'rtae' : '{:.2%}', 'r2' : '{:.3%}'}
+  FORMATS.update({item[0] : '{:g}' for item in DESC_NAMES})
+
+  def __init__(self, models, reals, shapes=None):
+    self.models = models
+    self.reals = reals
+    self.shapes = shapes
+    common.debug(self.models[:10])
+    common.debug(self.reals[:10])
+  
+  @classmethod
+  def fromDict(cls, data, modelkey, realkey, shapekey=None):
+    return cls(*cls.transform(data, modelkey, realkey, shapekey))
+  
+  def validate(self):
+    self.realSum = self.reals.sum()
+    self.realMean = self.realSum / len(self.reals)
+    self.modelSum = self.models.sum()
+    self.mismatch = self.modelSum - self.realSum
+    self.resid = self.models - self.reals
+    self.absResid = abs(self.resid)
+    self.tae = self.absResid.sum()
+    self.rtae = 0.5 * self.tae / self.realSum
+    self.r2 = 1 - (self.absResid ** 2).sum() / ((self.models - self.realMean) ** 2).sum()
+    common.debug('TAE ', self.tae)
+    common.debug('RTAE', self.rtae)
+    common.debug('R2  ', self.r2)
+  
+  def describe(self, data):
+    return {'min' : data.min(), 'max' : data.max(), 'sum' : data.sum(), 'mean' : data.mean(), 'median' : numpy.median(data), 'q25' : numpy.percentile(data, 25), 'q75' : numpy.percentile(data, 75), 'q10' : numpy.percentile(data, 10), 'q90' : numpy.percentile(data, 90), 'q2l' : numpy.percentile(data, 2.5), 'q2h' : numpy.percentile(data, 97.5)}
+  
+  def descriptions(self):
+    descs = []
+    for name, data in (('Modeled', self.models), ('Real', self.reals), ('Residuals', self.resid), ('Abs(Residuals)', self.absResid)):
+      desc = self.format(self.describe(data))
+      desc['set'] = name
+      descs.append(desc)
+    return descs
+  
+  def globals(self):
+    return dict(mismatch=self.mismatch, tae=self.tae, rtae=self.rtae, r2=self.r2)
+    
+  def format(self, fdict):
+    return {key : self.FORMATS[key].format(float(value)).replace('.', ',') for key, value in fdict.iteritems()}
+  
+  def output(self, fileName):
+    import html
+    try:
+      with open(os.path.join(os.path.dirname(__file__), self.TEMPLATE_FILE)) as templFile:
+        template = templFile.read()
+    except IOError:
+      raise IOError, 'report template file not found'
+    template = template.replace('{', '[').replace('}', ']').replace('[[', '{').replace(']]', '}')
+    text = template.format(
+        erragg=html.dictToTable(self.format(self.globals()), self.ERRAGG_NAMES),
+        setdescstat=html.dictToTable(self.descriptions(), self.DESC_NAMES, rowHead=True)
+    )
+    with open(fileName, 'w') as outfile:
+      outfile.write(text.replace('[', '{').replace(']', '}'))
+    try:
+      import matplotlib
+      self.outputImages(os.path.dirname(fileName))
+    except ImportError:
+      common.message('Matplotlib unavailable, skipping image output')
+  
+  def outputImages(self, directory):
+    import matplotlib.pyplot as plt
+    plt.figure()
+    plt.plot(self.reals, self.models, 'b.')
+    plt.xlabel('Real values')
+    plt.ylabel('Modeled values')
+    plt.savefig(os.path.join(directory, 'correl.png'), bbox_inches='tight')
+    
+    
+  @staticmethod
+  def transform(data, modelkey, realkey, shapekey=None):
+    models = []
+    reals = []
+    if shapekey:
+      shapes = []
+    for item in data:
+      models.append(item[modelkey])
+      reals.append(item[realkey])
+      if shapekey:
+        shapes.append(item[shapekey])
+    return numpy.array(models), numpy.array(reals), numpy.array(shapes) if shapekey else None
     
 if __name__ == '__main__':
   atest = numpy.arange(0,10,0.5)

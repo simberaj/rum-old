@@ -423,6 +423,8 @@ class Subdivider:
     self.maxwagner = maxwagner
     self.densifyDist = math.sqrt(self.maxarea) / float(self.DENSIFY_COEF)
     self.sideTolerance = self.densifyDist / float(self.DENSIFY_COEF)
+    # import common
+    # common.debug(self.minarea, self.maxarea, self.maxwagner)
     # global plt
     # import matplotlib.pyplot as plt
     # plt.figure().gca().set_aspect(True)
@@ -446,7 +448,7 @@ class Subdivider:
         print(stack[-3].coors, stack[-3].area)
         print(stack[-2].coors, stack[-2].area)
         print(stack[-1].coors, stack[-1].area)
-        raise RuntimeError
+        raise MemoryError
       current = stack.pop()
       # poly = multipolygon.coors[0][0]
       # xs = [pt[0] for pt in poly]

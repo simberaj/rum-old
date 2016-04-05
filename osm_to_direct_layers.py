@@ -57,6 +57,8 @@ def _convert(osmfile, folder, config):
 if __name__ == '__main__':
   import common
   with common.runtool(5) as parameters:
+    # import cProfile
+    # cProfile.run('convert(*parameters)')
     convert(*parameters)
   # parser = argparse.ArgumentParser(description=DESCRIPTION)
   # parser.add_argument('osmFile', metavar='osm', type=unicode, help='an OSM file whose contents are to be translated')

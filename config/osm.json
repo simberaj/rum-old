@@ -703,12 +703,16 @@
     "geometry" : "LineString",
     "input-geometries" : ["line"],
     "selector" : {
-      "compound" : "or", 
+      "compound" : "and",
       "clauses" : [
-        {"railway" : ["yes", "funicular", "light_rail", "monorail", "narrow_gauge", "rail", "tram"]},
-        {"highway" : ["motorway", "trunk", "primary", "secondary"]},
-        {"barrier" : true},
-        {"waterway" : ["river", "stream", "canal", "drain", "ditch"]}
+        {"compound" : "or", 
+         "clauses" : [
+          {"railway" : ["yes", "funicular", "light_rail", "monorail", "narrow_gauge", "rail", "tram"]},
+          {"highway" : ["motorway", "trunk", "primary", "secondary"]},
+          {"barrier" : true},
+          {"waterway" : ["river", "stream", "canal", "drain", "ditch"]}
+        ]},
+        {"compound" : "not", "clauses" : [{"tunnel" : true}]}
       ]
     },
     "attributes" : [
@@ -718,7 +722,33 @@
       
       {"name" : "intensity",
        "type" : "float",
-       "getter" : {"constant" : 1}}
+       "getter" : {"constant" : 1}},
+       
+      {"name" : "repellence",
+       "type" : "float",
+       "getter" : {
+          "more" : [
+            {"switch" : "railway",
+              "cases" : {
+                "yes" : 0.5,
+                "light_rail" : 0.5,
+                "monorail" : 0.5,
+                "narrow_gauge" : 0.25,
+                "rail" : 0.5,
+                "tram" : 0.25
+              }},
+            {"switch" : "highway",
+              "cases" : {
+                "motorway" : 3,
+                "trunk" : 3,
+                "primary" : 2,
+                "secondary" : 1
+              }},
+            {"ifpresent" : "barrier",
+              "value" : 0},
+            {"ifpresent" : "waterway",
+              "value" : 0}
+          ]}}
     ]
   },
   "transport" : {
@@ -736,10 +766,6 @@
         {"compound" : "not",
           "clauses" : [
             {"usage" : ["freight", "industrial", "military"]}
-          ]},
-        {"compound" : "not",
-          "clauses" : [
-            {"access" : ["no"]}
           ]}
       ]
     },
@@ -829,83 +855,28 @@
               "unclassified" : "unclassified",
               "residential" : "residential",
               "living_street" : "living_street",
+              "service" : "service",
               "motorway_link" : "link",
               "trunk_link" : "link",
               "primary_link" : "link",
               "secondary_link" : "link",
               "tertiary_link" : "link",
               "road" : "unclassified",
-              "pedestrian" : "paved_bicycle",
-              "track" : "unpaved_foot",
-              "footway" : "unpaved_foot",
-              "bridleway" : "unpaved_foot",
-              "steps" : "unpaved_foot",
-              "path" : "unpaved_bicycle",
-              "cycleway" : "paved_bicycle"
+              "pedestrian" : "bicycle",
+              "track" : "foot",
+              "footway" : "foot",
+              "bridleway" : "foot",
+              "steps" : "foot",
+              "path" : "bicycle",
+              "cycleway" : "bicycle"
             }},
           {"switch" : "bicycle_road",
             "cases" : {
-              "yes" : "paved_bicycle"
+              "yes" : "bicycle"
             }}
         ]
       }},
-       
-      {"name" : "speed",
-       "type" : "float",
-       "getter" : {
-        "max" : [
-          {"min" : [
-            {"more" : [
-              {"switch" : "aerialway",
-                "cases" : {
-                  "cable_car" : 10,
-                  "chair_lift" : null
-                }},
-              {"switch" : "railway",
-                "cases" : {
-                  "yes" : 60,
-                  "light_rail" : 50,
-                  "monorail" : 30,
-                  "narrow_gauge" : 50,
-                  "rail" : 60,
-                  "subway" : 40,
-                  "tram" : 30
-                }},
-              {"switch" : "highway",
-                "cases" : {
-                  "motorway" : 115,
-                  "trunk" : 105,
-                  "primary" : 70,
-                  "secondary" : 50,
-                  "tertiary" : 30,
-                  "unclassified" : 30,
-                  "residential" : 20,
-                  "living_street" : 20,
-                  "motorway_link" : 20,
-                  "trunk_link" : 20,
-                  "primary_link" : 20,
-                  "secondary_link" : 20,
-                  "tertiary_link" : 20,
-                  "road" : 30,
-                  "pedestrian" : 10,
-                  "track" : null,
-                  "footway" : null,
-                  "bridleway" : null,
-                  "steps" : null,
-                  "path" : 15,
-                  "cycleway" : 20
-                }},
-              {"switch" : "bicycle_road",
-                "cases" : {
-                  "yes" : 20
-                }}
-            ]},
-            {"get" : "minspeed"}
-          ]},
-          {"get" : "maxspeed"}
-        ]
-      }},
-       
+              
       {"name" : "oneway",
        "type" : "boolean",
        "getter" : {
@@ -919,18 +890,17 @@
         ]
       }},
       
-      {"name" : "bridge",
-       "type" : "boolean",
+      {"name" : "level",
+       "type" : "int",
        "getter" : {
-          "ifpresent" : "bridge",
-          "value" : true
-       }},
-       
-      {"name" : "tunnel",
-       "type" : "boolean",
-       "getter" : {
-          "ifpresent" : "tunnel",
-          "value" : true
+          "alternative" : [
+            {"get" : "level"},
+            {"ifpresent" : "bridge",
+             "value" : 1},
+            {"ifpresent" : "tunnel",
+              "value" : -1},
+            {"constant" : 0}
+          ]
        }}
    ]
   },

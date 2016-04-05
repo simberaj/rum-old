@@ -5,6 +5,7 @@ import geojson
 from collections import defaultdict
 import geometry
 import re
+import warnings
 
 MAX_TILE_SIZE_DEG = 0.1
 
@@ -116,11 +117,14 @@ class OSMHandler(sax.handler.ContentHandler):
       props = self.relationProperties(refs, props)
       if props:
         try:
-          geom = self.relationGeometry(refs, props)
+          geom = self.relationGeometry(refs, props, id)
           # print('RELATION', geom)
           self.writeFeature(geom, props, id)
-        except MalformedRelationError:
-          pass
+        except MalformedRelationError as message:
+          warnings.warn(str(message) + ', skipping')
+          # pass
+          # print(props, refs)
+          # raise
     del self.relProps[id]
   
   def relationProperties(self, refs, props):
@@ -154,15 +158,15 @@ class OSMHandler(sax.handler.ContentHandler):
       print(coors, wayrefs)
       raise
   
-  def relationGeometry(self, relrefs, tags=None):
+  def relationGeometry(self, relrefs, tags=None, id=None):
     # print('refs', relrefs)
     # print('reftr', len(self.ways), [self.ways[id] for id in relrefs['outer'] if id in self.ways])
     relrefs['outer'].extend(relrefs[''])
     rings = {}
     for role in self.WINDINGS.keys():
-      noderefs = [self.ways[id] for id in relrefs[role] if id in self.ways and len(self.ways[id]) > 3]
+      noderefs = [self.ways[id] for id in relrefs[role] if id in self.ways]
       # print(noderefs)
-      rings[role] = [self.noderefsToLine(ring) for ring in self.ringify(noderefs)]
+      rings[role] = [self.noderefsToLine(ring) for ring in self.ringify(noderefs, id)]
       for ring in rings[role]:
         geometry.setWinding(ring, self.WINDINGS[role])
       # for ring in rings[role]:
@@ -172,11 +176,19 @@ class OSMHandler(sax.handler.ContentHandler):
     # print('rings', rings)
     outer = rings['outer']
     holeLists = self.matchHoles(outer, rings['inner'])
-    coors = [[outer[i]] + holeLists[i] for i in xrange(len(outer))]
+    coors = [self.dropDegens([outer[i]] + holeLists[i]) for i in xrange(len(outer))]
+    while None in coors:
+      coors.remove(None) # degenerate outer rings
     if coors:
       return {'type' : 'MultiPolygon', 'coordinates' : coors}
     else:
-      raise MalformedRelationError
+      raise MalformedRelationError, 'hole matching failed' + ('' if id is None else (' for relation ' + str(id)))
+    
+  def dropDegens(self, ringlist):
+    if len(ringlist[0]) > 3:
+      return [ring for ring in ringlist if len(ring) > 3]
+    else:
+      return None
     
   def noderefsToLine(self, wayrefs):
     return [self.nodes[ref] for ref in wayrefs]
@@ -197,7 +209,7 @@ class OSMHandler(sax.handler.ContentHandler):
         # we leave out holes whose first point is not inside
   
   @staticmethod
-  def ringify(ways): # merges ways to rings
+  def ringify(ways, id=None): # merges ways to rings
     rings = []
     i = 0
     while i < len(ways):
@@ -214,9 +226,18 @@ class OSMHandler(sax.handler.ContentHandler):
           elif ways[i][0] == ways[j][-1]: # predecessor
             ways[i] = ways.pop(j) + ways[i][1:]
             break
+          elif ways[i][0] == ways[j][0]: # reverse predecessor
+            ways[i] = list(reversed(ways.pop(j))) + ways[i][1:]
+            break
+          elif ways[i][-1] == ways[j][-1]: # reverse successor
+            ways[i] = ways[i][:-1] + list(reversed(ways.pop(j)))
+            break
           else:
             j += 1
-        raise MalformedRelationError, 'open multipolygon'
+        else:
+          if sum(len(way) for way in ways) < 1000:
+            print(ways)
+          raise MalformedRelationError, 'open multipolygon' + ('' if id is None else (' for relation ' + str(id)))
     return rings
   
   @staticmethod
@@ -289,12 +310,6 @@ def allBox(bboxes):
           max(bbox[2] for bbox in bboxes),
           max(bbox[3] for bbox in bboxes))
           
-          # (
-  # node(50.746,7.154,50.748,7.157);
-  # <;
-  # >;
-# );
-# out meta;
       
 def downloadAddress(extent): # s w n e
   return 'http://overpass-api.de/api/interpreter?data=(node({1},{0},{3},{2});<;>;);out%20meta;'.format(*tuple(str(x) for x in extent))

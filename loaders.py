@@ -4,7 +4,7 @@ import os, collections, operator, arcpy, objects, common, math# , geojson
 from xml.etree import cElementTree as eltree
 
 # TODOS
-# generator functions for cursors? what for?
+# generator functions for cursors
 # sequential setter? what for?
 
 SHAPE_SLOT = 'shape'
@@ -851,9 +851,9 @@ class BasicReader(DatasetReader):
   requiredInputSlots = []
   targetClass = dict
   
-  def __init__(self, layer, slotDict, targetClass=None, where=None, sortSlots=[]):
+  def __init__(self, layer, slotDict, targetClass=None, where=None, sortSlots=[], constants={}):
     DatasetReader.__init__(self, layer, targetClass=targetClass)
-    self.reader = ReadCursor(layer, self.createGetter(slotDict), where=where, sortSlots=sortSlots)
+    self.reader = ReadCursor(layer, self.createGetter(slotDict, constants), where=where, sortSlots=sortSlots)
 
   def read(self, text=None):
     return list(self.reader.rows(text=text))
@@ -861,9 +861,9 @@ class BasicReader(DatasetReader):
 class DictReader(DatasetReader):
   requiredInputSlots = ['id']
 
-  def __init__(self, layer, slotDict, where=None, sortSlots=[]):
+  def __init__(self, layer, slotDict, where=None, sortSlots=[], constants={}):
     DatasetReader.__init__(self, layer)
-    self.reader = ReadCursor(layer, self.createGetter(slotDict), where=where, sortSlots=sortSlots)
+    self.reader = ReadCursor(layer, self.createGetter(slotDict, constants), where=where, sortSlots=sortSlots)
   
   def read(self, text=None):
     out = {}
@@ -1461,48 +1461,6 @@ def findExtentTiles(clipping, maxxDeg, maxyDeg, shout=False):
       cells = OneFieldReader(overlap, SHAPE_SLOT).read()
       for cell in cells:
         yield projectBBox(geometry.MultiPolygon(cell).bbox, crs, WGS_84_PRJ)
-
-class Raster:
-  def __init__(self, source):
-    self.source = source
-    self.raster = arcpy.RasterToNumPyArray(self.source)
-    self.rows, self.cols = self.raster.shape
-    dsc = arcpy.Describe(self.source)
-    self.dx = dsc.MeanCellWidth
-    self.dy = abs(dsc.MeanCellHeight)
-    # coordinates of (0, 0)
-    self.x0 = dsc.extent.XMin + self.dx / 2.0
-    self.y0 = dsc.extent.YMax - self.dy / 2.0
-    
-  def toIndex(self, x, y):
-    j = int(round((x - self.x0) / self.dx))
-    i = int(-round((y - self.y0) / self.dy))
-    # print(i, j)
-    # print(self.cols, self.rows)
-    if i < 0 or i > self.rows or j < 0 or j > self.cols:
-      return None
-    else:
-      return i, j
-
-  def toCells(self, dist):
-    return dist / float(self.dx)
-  
-  def get(self, i, j):
-    return self.raster[i,j]
-  
-  def getRect(self, i1, i2, j1, j2):
-    return self.raster[i1:i2,j1:j2]
-
-  def getByLoc(self, x, y):
-    idx = self.toIndex(x, y)
-    if idx is None:
-      return None
-    else:
-      return self.get(*idx)
-
-  @property
-  def shape(self):
-    return self.raster.shape
       
         
 def determineCellCounts(bboxAll, maxx, maxy):

@@ -8,9 +8,9 @@ MIN_RATIO = 5
 def _subdivided(features, maxarea, maxwagner, minarea=None):
   prog = common.progressor('subdividing features', len(features))
   shapeSlot = loaders.SHAPE_SLOT
+  subdiv = geometry.Subdivider((maxarea / MIN_RATIO if not minarea else minarea), maxarea, maxwagner)
   for feat in features:
-    for sub in geometry.subdivide(feat[shapeSlot],
-        maxarea / MIN_RATIO if not minarea else minarea, maxarea, maxwagner):
+    for sub in subdiv.subdivideList(feat[shapeSlot]):
       item = feat.copy()
       item[shapeSlot] = sub
       yield item
@@ -28,7 +28,8 @@ def subdivide(source, target, maxarea, maxwagner, minarea, transferFlds):
     inSlots[fld] = fld
     outSlots[fld] = fld
   ld = loaders.BasicReader(source, inSlots)
-  subs = list(_subdivided(ld.read(text='reading features'), maxarea, maxwagner, minarea))
+  tosub = ld.read(text='reading features')
+  subs = list(_subdivided(tosub, maxarea, maxwagner, minarea))
   # import cProfile
   # cProfile.runctx("subs = list(_subdivided(ld.read(text='processing'), maxarea, maxwagner, minarea))", globals(), locals())
   wr = loaders.BasicWriter(target, outSlots, crs=source)
