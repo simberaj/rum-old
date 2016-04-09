@@ -437,7 +437,7 @@ def copyField(layer, fromFld, toFld):
   arcpy.CalculateField_management(layer, toFld, '!{}!'.format(fromFld), 'PYTHON_9.3')
 
 def calcField(layer, fld, expr, type=None, prelogic=''):
-  if type:
+  if type and fld not in fieldList(layer):
     addField(layer, fld, type)
   arcpy.CalculateField_management(layer, fld, expr, 'PYTHON_9.3', prelogic)
   

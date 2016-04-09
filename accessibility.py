@@ -22,7 +22,7 @@ def accessibility(origins, network, impedance, testTargets=None, testCount=20, a
     if testTargets is None:
       if shout: common.progress('creating accessibility testing targets')
       testTargets = pathman.tmpFile()
-      createSubdividedCentroids(origins, testTargets, count=testPoints)
+      createSubdividedCentroids(origins, testTargets, count=testCount)
     origIDFld = common.ensureIDField(origins)
     tgtIDFld = common.ensureIDField(testTargets)
     # calculate origin network locations

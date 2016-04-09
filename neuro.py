@@ -37,17 +37,21 @@ class TransferLayer(NeuronLayer):
     return self.activate(self.weights.dot(self.previous(values)))
   
   def train(self, input, target, rate, shout=True):
-    # print('input', input, target, rate)
+    # print(shout)
+    if shout: print('input', input, target, rate)
     # print('TRAINING', self.size)
+    if shout: print('weights', self.weights)
     weighted = self.weights.dot(input)
+    if shout: print('weighted', weighted)
     myOutput = self.activate(weighted)
-    # print(input, weighted, target)
+    if shout: print('myoutput', myOutput)
     if self.next is None:
       error = target - myOutput
     else:
-      error = self.next.train(myOutput, target, rate)
-    # print('ADJUSTING', self.size)
+      error = self.next.train(myOutput, target, rate, shout)
+    if shout: print('error', error)
     delta = self.inverse(weighted) * error
+    if shout: print('delta', delta)
     # if shout:
       # # print(self.weights)
       # print(self.size, self.weights, input, myOutput, target, weighted, delta)
@@ -57,6 +61,7 @@ class TransferLayer(NeuronLayer):
     # print(rate, weighted, delta, delta[:,numpy.newaxis], input[numpy.newaxis,:])
     # raise RuntimeError
     self.weights += rate * delta[:,numpy.newaxis] * input[numpy.newaxis,:]
+    if shout: print('newweights', self.weights)
     # backpropagate the error
     return delta.dot(self.weights)
   
@@ -105,37 +110,83 @@ class TanhLayer(TransferLayer):
     
 class InputLayer(NeuronLayer):
   def train(self, input, target, rate, shout=False):
-    self.next.train(input, target, rate)
+    self.next.train(input, target, rate, shout)
     
   
 class NeuralNetwork:
+  SEED_RANDOMIZATION_VARIANCE = 1 / 12.0
+
   def __init__(self, layers):
     self.input = layers[0]
     for i in range(len(layers)-1):
       layers[i].connect(layers[i+1])
     self.output = layers[-1]
-    self.inpmax = 1.0
-    self.outmax = 1.0
+    self._layers = layers
+    # self.inpmax = 1.0
+    # self.outmax = 1.0
+    self._seedCoefs = None
   
   def __repr__(self):
     return repr(self.output)
   
+  def seed(self, coefs):
+    import common
+    common.debug('SEEDING INPUT', coefs)
+    self._seedCoefs = coefs
+  
+  def _seed(self):
+    import common
+    common.debug('SEEDING', self._seedCoefs)
+    if self._seedCoefs:
+      print(self._seedCoefs)
+      print(self.inpmax)
+      print(self.outmax)
+      coefs = self._seedCoefs * self.inpmax / self.outmax
+      print(coefs)
+      # print(self._layers[1].weights)
+      # print(self._layers[1].weights.dot(numpy.array([1,1,1,1,1])))
+      self._layers[1].weights = self.randomizedCoefs(numpy.array(coefs), self._layers[1].getSize())
+      for i in range(2, len(self._layers)):
+        prevSize = self._layers[i-1].getSize()
+        self._layers[i].weights = self.randomizedCoefs(
+            numpy.array([1.0 / prevSize] * prevSize), self._layers[i].getSize())
+    self.debugWeights()
+    # print(self.
+  
+  def debugWeights(self):
+    for i in range(1, len(self._layers)):
+      print(i, self._layers[i].weights)
+      
+  def randomizedCoefs(cls, coefs, layerSize):
+    return coefs[numpy.newaxis,:] + \
+      numpy.random.randn(layerSize, coefs.size) * coefs * cls.SEED_RANDOMIZATION_VARIANCE
+  
   def train(self, inputs, outputs, rate=0.01, maxiter=20):
     # print('MAIN TRAINER', inputs.shape, outputs.shape)
     # rescale the inputs and outputs
+    import common
+    common.debug('input data')
+    common.debug(inputs[:5], outputs[:5])
     self.inpmax = inputs.max(axis=0)
     self.outmax = outputs.max()
     inp = inputs / self.inpmax
     out = outputs / self.outmax
-    # print(inp[:20], out[:20])
+    self._seed()
+    common.debug('training data')
+    common.debug(inp[:5], out[:5])
     for iter in xrange(maxiter):
       for i in xrange(len(outputs)):
-        self.input.train(inp[i], out[i], rate)#, shout=(i % 10 == 0))
-    return self.get()
+        self.input.train(inp[i], out[i], rate, shout=False)
         # raise RuntimeError
+    return self.get()
   
   def get(self):
+    import common
+    common.debug(self.inpmax, self.outmax)
+    for i in range(1, len(self._layers)):
+      common.debug(i, self._layers[i].weights)
     return lambda input: self.output(input / self.inpmax) * self.outmax
+    # return self.output
       
   
 if __name__ == '__main__':

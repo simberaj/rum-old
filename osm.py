@@ -7,7 +7,7 @@ import geometry
 import re
 import warnings
 
-MAX_TILE_SIZE_DEG = 0.1
+MAX_TILE_SIZE_DEG = 0.2
 
 class MalformedRelationError(Exception):
   pass

@@ -44,7 +44,9 @@ def apply(model, segments, saveFld):
   model.setFeatureNames(featureFields(segments))
   modelFX = model.get()
   for seg in data:
+    common.debug('input', model.featuresToList(seg))
     seg['value'] = float(modelFX(model.featuresToList(seg)))
+    common.debug('output', seg['value'])
   common.debug(data)
   save(data, segments, {'value' : saveFld})
   

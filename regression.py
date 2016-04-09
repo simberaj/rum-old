@@ -32,14 +32,14 @@ class Model(object):
     self.checkFeatures()
   
   def featuresToList(self, featDict):
-    common.debug([featDict[featName] for featName in self.featureNames])
+    # common.debug([featDict[featName] for featName in self.featureNames])
     return [featDict[featName] for featName in self.featureNames]
     
   def getName(self):
     return self.name
     
-  def train(self):
-    pass
+  def getCoefficients(self):
+    raise NotImplementedError
   
   def checkFeatures(self):
     pass
@@ -85,11 +85,11 @@ class Model(object):
   def compute(self, features):
     return self.get()(features)
   
-  def train(self):
-    self._train(self._prepareFeatures(), self._prepareTargets())
+  def train(self, **kwargs):
+    self._train(self._prepareFeatures(), self._prepareTargets(), **kwargs)
   
   def _prepareFeatures(self):
-    input = numpy.matrix([list(row) + [1] for row in self.features])
+    input = numpy.array([list(row) + [1] for row in self.features])
     # exclude zero features
     self.excluded = []
     cols = input.shape[1]
@@ -99,7 +99,7 @@ class Model(object):
     return numpy.delete(input, self.excluded, 1)
   
   def _prepareTargets(self):
-    return numpy.matrix(self.results).reshape(len(self.results), 1)
+    return numpy.array(self.results)
   
   @staticmethod
   def deserialize(file):
@@ -113,10 +113,15 @@ class OLSModel(Model):
     self.trained = True
     # common.debug(len(self.featureNames), len(self.coefs))
     # common.debug([(self.featureNames[i], self.coefs[i]) for i in range(len(self.coefs))])
-    common.debug(self.coefs)
-    common.debug(self.featureNames)
-    common.debug(self.absolute)
-
+    # common.debug(self.coefs)
+    # common.debug(self.featureNames)
+    # common.debug(self.absolute)
+  
+  def _prepareFeatures(self):
+    return numpy.matrix(Model._prepareFeatures(self))
+    
+  def _prepareTargets(self):
+    return numpy.matrix(Model._prepareTargets(self)).reshape(len(self.results), 1)
     
   def checkFeatures(self):
     if self.coefs and len(self.featureNames) != len(self.coefs):
@@ -139,6 +144,9 @@ class OLSModel(Model):
     for i in self.excluded:
       unknowns.insert(i, 0.0)
     return unknowns[:-1], unknowns[-1]
+  
+  def getCoefficients(self):
+    return self.coefs + [self.absolute]
 
     
 class ARDModel(OLSModel):
@@ -182,62 +190,28 @@ class ARDModel(OLSModel):
     
 class ANNMLPModel(Model):
   INLAYER_COEF = 2
-  # INLAYER2_COEF = 1
 
-  def _train(self, feats, tgts, epochs=100, mindiff=1e-3):
-    feats = numpy.asarray(feats)
+  def _train(self, feats, tgts, epochs=100, mindiff=1e-3, seedOLS=True):
     featCount = len(feats[0])
     self.net = self._createNet(featCount)
-    # print('inmodel', tgts.shape, numpy.asarray(tgts).flatten().shape)
-    self.net.train(numpy.asarray(feats), numpy.asarray(tgts).flatten(), maxiter=epochs)
+    if seedOLS:
+      seedmodel = OLSModel()
+      seedmodel.addExamples(feats[:,:-1], tgts)
+      seedmodel.train()
+      self.net.seed(seedmodel.getCoefficients())
+    self.net.train(feats, numpy.asarray(tgts).flatten(), maxiter=epochs)
     self.trained = True
     
   def getFunction(self):
     infx = self.net.get()
-    return lambda row: infx(row + [1])
-    # from pybrain.datasets import SupervisedDataSet
-    # from pybrain.supervised.trainers import BackpropTrainer
-    # traindata = SupervisedDataSet(featCount, 1)
-    # for i in range(len(tgts)):
-      # print(list(feats[i].flatten()), float(tgts[i]))
-      # traindata.addSample(tuple(feats[i].flatten()), float(tgts[i]))
-    # trainer = BackpropTrainer(net, traindata)
-    # errors = [1e20]
-    # for i in range(epochs):
-      # errors.append(trainer.train())
-      # if abs(errors[-1] - errors[-2]) < mindiff:
-        # break
-    # self.errors = errors[1:]
-    # def fx(row):
-      # print('activating', list(row) + [1], net.activate(list(row) + [1]))
-      # return net.activate(list(row) + [1])
-    # # self.function = lambda row: net.activate(list(row) + [1])
-    # self.function = fx
-    # self.trained = True
-  
+    return lambda row: float(infx(row + [1]))
+    
   def _createNet(self, featCount):
     net = neuro.NeuralNetwork([neuro.InputLayer(featCount), neuro.TanhLayer(self.INLAYER_COEF * featCount), neuro.TanhLayer(1)])
+    # net = neuro.NeuralNetwork([neuro.InputLayer(featCount), neuro.TransferLayer(self.INLAYER_COEF * featCount), neuro.TransferLayer(1)])
     return net
-    # import pybrain
-    # from pybrain.structure import FeedForwardNetwork, LinearLayer, SigmoidLayer, FullConnection
-    # net = FeedForwardNetwork()
-    # inLayer = LinearLayer(featCount)
-    # hiddenLayer = SigmoidLayer(self.INLAYER1_COEF * featCount)
-    # hiddenLayer2 = SigmoidLayer(self.INLAYER2_COEF * featCount)
-    # outLayer = LinearLayer(1)
-    # net.addInputModule(inLayer)
-    # net.addModule(hiddenLayer)
-    # net.addModule(hiddenLayer2)
-    # net.addOutputModule(outLayer)
-    # in_to_hidden = FullConnection(inLayer, hiddenLayer)
-    # hh2 = FullConnection(hiddenLayer, hiddenLayer2)
-    # hidden_to_out = FullConnection(hiddenLayer2, outLayer)
-    # net.addConnection(in_to_hidden)
-    # net.addConnection(hh2)
-    # net.addConnection(hidden_to_out)
-    # net.sortModules()
-    # return net
-   
+
+    
 MODELS = {'OLS' : OLSModel, 'ARD' : ARDModel, 'ANN' : ANNMLPModel}   
     
 def create(modelType):

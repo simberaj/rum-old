@@ -340,11 +340,13 @@ class ContainmentExtractor(FeatureExtractor): # počítá vnitřky
       else:
         selected = self.source
       # make the area available for the normalization
-      areaFld = pathman.tmpField(segments)
-      common.calcField(segments, areaFld, '!shape.area!', float)
+      areaFld = pathman.tmpField(segments, float)
+      common.calcField(segments, areaFld, '!shape.area!')
       # intersect the source and the segments
       featIdent = pathman.tmpFile()
       arcpy.Identity_analysis(selected, segments, featIdent, 'ONLY_FID')
+      # add the area field from the segments
+      arcpy.JoinField_management(featIdent, common.joinIDName(segments, featIdent), segments, common.ensureIDField(segments), areaFld)
       data = loaders.BasicReader(featIdent, self._slots(featIdent, segments, areaFld)).read()
       for feat in data:
         # print(feat['id'], (1 if self.weightField is None else feat['weight'], feat))
@@ -360,25 +362,29 @@ class ContainmentExtractor(FeatureExtractor): # počítá vnitřky
     return mainDict
   
   def getExtensiveIndicators(self):
-    return [agg.getExtensiveIndicators() for agg in self.aggregators]
+    inds = []
+    for agg in self.aggregators:
+      inds.extend(agg.getExtensiveIndicators())
+    return inds
     
   def _slots(self, source, segments, areaFld=None):
     slots = self.getReadSlots()
     slots['id'] = common.joinIDName(segments, source)
     if self.weightField is not None:
       slots['weight'] = self.weightField
-    if areaFld is None:
+    if areaFld is not None:
       slots['area'] = areaFld
+    common.debug(slots, common.fieldList(source))
     return slots
 
     
 class PolygonInPolygonExtractor(ContainmentExtractor):
-  def _slots(self, source, segments):
-    slots = ContainmentExtractor._slots(self, source, segments)
+  def _slots(self, source, segments, areaFld=None):
+    slots = ContainmentExtractor._slots(self, source, segments, areaFld)
     areaFld = common.ensureShapeAreaField(source)
     if self.weightField:
       # multiply the weights with area
-      multFld = common.PathManager(source, shout=False).tmpField(source, float, delete=False)
+      multFld = common.PathManager(source, shout=False).tmpField(source, float)
       # do not delete the field, will be torn down with the whole layer
       arcpy.CalculateField_management(source, multFld,
           '!{}! * !{}!'.format(self.weightField, areaFld), 'PYTHON_9.3')
@@ -446,7 +452,7 @@ class GaussianPointExtractor(GaussianProximityExtractor):
       # mean x value is in the middle (pts sorted by x)
       xDivI = int(len(pts) / 2.0)
       xDiv = 0.5 * (pts[xDivI][0] + pts[xDivI+1][0])
-      # mean y value determined by random sampling
+      # mean y value determined by random sampling from a quarter of points
       tries = int(max(cls.BUCKET_SIZE, cls.SAMPLING_COEF * len(pts)))
       yDiv = sum(random.choice(pts)[1] for k in xrange(tries)) / tries
       nw, ne, sw, se = [], [], [], []
@@ -576,10 +582,10 @@ class CalculationLayer:
   AUXILIARY_LAYERS = []
   descriptions = []
 
-  def addAuxiliarySource(self, aux):
+  def addAuxiliarySource(self, name, aux):
     if not hasattr(self, 'auxiliary'):
       self.auxiliary = {}
-    self.auxiliary[aux.NAME] = aux.getSource()
+    self.auxiliary[name] = aux
   
   def input(self, source):
     self.source = source
@@ -754,27 +760,26 @@ class TransportLayer(CalculationLayer):
     return [self.FEATURE]
   
   def precalculate(self):
-    with common.PathManager(self.source) as pathman:
-      common.progress('intersecting lines to routable')
-      import lines_to_routable
-      routable = pathman.tmpFC()
-      lines_to_routable.linesToRoutable(self.source, routable, levelFld=self.levelField, groundLevel=0, transferFlds=[self.typeField, self.ONEWAY_FIELD])
-      common.progress('finding builtup areas')
-      builtup = pathman.tmpLayer()
-      self.selectBuiltupLanduse(builtup)
-      common.progress('buffering builtup areas')
-      builtupBuffer = pathman.tmpFC()
-      arcpy.Buffer_analysis(builtup, builtupBuffer, self.bufferDist, '', '', 'ALL')
-      common.progress('intersecting with builtup areas')
-      intravilan = pathman.tmpFC()
-      arcpy.Identity_analysis(routable, builtupBuffer, intravilan, 'ONLY_FID', self.tolerance)
-      self.calcFields(intravilan, common.joinIDName(builtupBuffer, intravilan))
-      self.prepareNetwork(intravilan)
+    common.progress('intersecting lines to routable')
+    import lines_to_routable
+    routable = self.pathman.tmpFC()
+    lines_to_routable.linesToRoutable(self.source, routable, levelFld=self.levelField, groundLevel=0, transferFlds=[self.typeField, self.ONEWAY_FIELD])
+    common.progress('intersecting with builtup areas')
+    intraroads = self.pathman.tmpFC()
+    intravilan = self.builtupBuffer(self.auxiliary[LandUseLayer.NAME])
+    arcpy.Identity_analysis(routable, intravilan, intraroads, 'ONLY_FID', self.tolerance)
+    self.calcFields(intraroads, common.joinIDName(intravilan, intraroads))
+    self.prepareNetwork(intraroads)
   
-  def selectBuiltupLanduse(self, builtup):
-    lu = self.auxiliary[LandUseLayer.NAME]
+  def builtupBuffer(self, lu):
+    common.progress('finding builtup areas')
+    builtup = self.pathman.tmpLayer()
     arcpy.MakeFeatureLayer_management(lu, builtup, common.safeQuery(
       self.builtupQuery.format(self.sourceField(self.codeField, lu)), lu))
+    common.progress('buffering builtup areas')
+    buffer = self.pathman.tmpFC()
+    arcpy.Buffer_analysis(builtup, buffer, self.bufferDist, '', '', 'ALL')
+    return buffer
   
   def calcFields(self, intravilan, builtupFIDFld):
     common.progress('determining intravilan lines')
@@ -795,20 +800,24 @@ class TransportLayer(CalculationLayer):
           '{', 'collections.defaultdict(float, {').replace(
               '}', '})') + ')')
   
-  def prepareNetwork(self, intravilan):
+  def prepareNetwork(self, lines):
     common.progress('preparing transport network')
-    self.net = self.copyNetwork(str(os.path.join(os.path.dirname(__file__), 'network')), common.folder(self.source), 'rum_nd', ['transport1'])
+    srcDir = str(os.path.join(os.path.dirname(__file__), 'network'))
+    tgtDir = self.pathman.tmpSubfolder()
+    self.net = self.copyNetwork(srcDir, tgtDir, 'rum_nd')
     common.progress('filling transport network')
-    arcpy.Append_management(intravilan, common.featurePath(common.folder(self.source), 'transport1'), 'NO_TEST')
+    arcpy.Append_management(lines, common.featurePath(tgtDir, 'transport1'), 'NO_TEST')
     common.progress('building transport network')
+    common.debug(self.net)
     arcpy.BuildNetwork_na(self.net)
   
   @staticmethod
-  def copyNetwork(srcFolder, tgtFolder, ndName, lineNames):
+  def copyNetwork(srcFolder, tgtFolder, ndName):
     # import shutil
     srcND = os.path.join(srcFolder, ndName + '.nd')
     tgtND = os.path.join(tgtFolder, ndName + '.nd')
     arcpy.Copy_management(srcND, tgtND)
+    return tgtND
     # common.debug(srcND, tgtND)
     # if os.path.isdir(tgtND):
       # shutil.rmtree(tgtND)
@@ -819,8 +828,9 @@ class TransportLayer(CalculationLayer):
     
   def calculate(self, segments, points):
     import accessibility
-    accessibility.accessibility(points, self.net, self.impedance, accFld=self.FEATURE)
+    accessibility.accessibility(points, self.net, 'time', accFld=self.FEATURE)
     return [], [self.FEATURE]
+    
     
 class RasterCalculationLayer(CalculationLayer):
   def calculate(self, segments, points):
@@ -831,8 +841,7 @@ class RasterCalculationLayer(CalculationLayer):
   def names(self):
     return self.FEATURES
   
-    
-class BarrierLayer(CalculationLayer):
+class BarrierLayer(RasterCalculationLayer):
   NAME = 'barrier'
   FEATURES = ['FFrepel']
   
@@ -845,11 +854,10 @@ class BarrierLayer(CalculationLayer):
     arcpy.CheckOutExtension('Spatial')
     common.progress('calculating barrier density')
     self.density = self.pathman.tmpRaster()
-    arcpy.LineDensity(self.source, self.field, self.cellSize, self.searchRadius, 'SQUARE_KILOMETERS')
+    arcpy.sa.LineDensity(self.source, self.field, self.cellSize, self.searchRadius, 'SQUARE_KILOMETERS').save(self.density)
+    self.rasters = [self.density]
 
-  
-  
-class DEMLayer(CalculationLayer):
+class DEMLayer(RasterCalculationLayer):
   NAME = 'dem'
   FEATURES = ['FFslope', 'FFwest', 'FFsouth', 'FFhperc']
   
@@ -879,8 +887,8 @@ class DEMLayer(CalculationLayer):
     
     
 class FeatureCalculator:
-  DEFAULT_LAYERS = [BuildingLayer, LandUseLayer, POILayer, TransportLayer, DEMLayer]
-  # DEFAULT_LAYERS = [DEMLayer]
+  DEFAULT_LAYERS = [BuildingLayer, LandUseLayer, POILayer, TransportLayer, BarrierLayer, DEMLayer]
+  # DEFAULT_LAYERS = [BarrierLayer]
   AREA_FIELD = 'WT_AREA'
 
   def __init__(self, layerClasses, config):
@@ -922,7 +930,7 @@ class FeatureCalculator:
     for layer in self.layers.itervalues():
       if layer.AUXILIARY_LAYERS:
         for auxLayerClass in layer.AUXILIARY_LAYERS:
-          layer.addAuxiliarySource(self.layers[auxLayerClass.NAME])
+          layer.addAuxiliarySource(auxLayerClass.NAME, sources[auxLayerClass.NAME])
 
   def names(self):
     nameList = []
@@ -1008,10 +1016,15 @@ def calculate(segments, layers, config, layerClasses=None):
   return calc.names()
     
 if __name__ == '__main__':
-  with common.runtool(4) as parameters:
-    segments, layer, name, config = parameters
+  with common.runtool(2) as parameters:
+    segments, layer = parameters
     import json
-    with open(config) as conffile:
+    with open('e:\\school\\tools\\config\\features.json') as conffile:
       configCont = json.load(conffile)
-    calculate(segments, {name : layer, 'landuse' : r'E:\school\dp\test\smichov\ua.shp'}, configCont)
-  # calculate(sys.argv[1], {'dem' : sys.argv[2]}, , [TransportLayer])
+    calculate(segments, {'transport' : layer, 'landuse' : r'E:\school\dp\test\malesice\malesice.gdb\ua'}, configCont, [TransportLayer])
+  # with common.runtool(4) as parameters:
+    # segments, layer, name, config = parameters
+    # import json
+    # with open(config) as conffile:
+      # configCont = json.load(conffile)
+    # calculate(segments, {name : layer, 'landuse' : r'E:\school\dp\test\smichov\ua.shp'}, configCont)

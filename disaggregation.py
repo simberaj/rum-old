@@ -21,6 +21,7 @@ class Disaggregator:
       targetFld = mainFld
     if not weightFld:
       weightFld = common.ensureShapeAreaField(layer)
+    # common.debug('by area', layer, mainIDFld, mainFld, weightFld, targetFld)
     # disaggregate by area
     # load data
     idFld = common.ensureIDField(layer)
@@ -33,9 +34,10 @@ class Disaggregator:
     weightSums = {}
     for item in input:
       mainID = item['mainid']
-      if mainID not in input:
+      if mainID not in weightSums:
         weightSums[mainID] = 0.0
       weightSums[mainID] += item['weight']
+    # common.debug(weightSums)
     if shout: common.progress('disaggregating values')
     output = {}
     for item in input:
