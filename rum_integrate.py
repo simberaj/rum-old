@@ -3,8 +3,9 @@ import osm
 import osm_to_direct_layers
 import os
 import loaders
+import arcpy
 
-def integrate(uaLayer, popLayer, demTiles, clipping, workspace, transformConf, prj=None):
+def integrate(uaLayer, popLayer, demTiles, clipping, workspace, transformConf=None, prj=None, osm=True):
   if not prj:
     common.warning('No explicit coordinate system specified, using Urban Atlas CRS: ETRS-89/LAEA')
     prj = arcpy.Describe(uaLayer).spatialReference
@@ -20,10 +21,14 @@ def integrate(uaLayer, popLayer, demTiles, clipping, workspace, transformConf, p
     common.warning('No explicit extent specified, using Urban Atlas layer extent')
     clipping = common.featurePath(workspace, 'extent')
     createClipping(uaLayer, clipping, prj)
-  elif prj != arcpy.Describe(clipping).spatialReference:
+  elif prj.factoryCode != arcpy.Describe(clipping).spatialReference.factoryCode:
+    # todo match by EPSG code
     common.progress('projecting analysis extent')
     arcpy.Project_management(clipping, common.featurePath(workspace, 'extent'), prj)
-  integrateOSM(workspace, transformConf, clipping, prj)
+  if osm:
+    if not transformConf:
+      raise ValueError, 'OSM download requested but no transformation configuration supplied'
+    integrateOSM(workspace, transformConf, clipping, prj)
   integrateUA(workspace, uaLayer, clipping, prj)
   if popLayer:
     integratePop(workspace, popLayer, clipping, prj)
@@ -111,6 +116,7 @@ def createClipping(layer, target, prj):
       arcpy.Project_management(diss, target, prj)
   else:
     arcpy.Dissolve_management(layer, target)
+      
   
 if __name__ == '__main__':
   with common.runtool(7) as parameters:

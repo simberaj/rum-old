@@ -114,7 +114,7 @@ class InputLayer(NeuronLayer):
     
   
 class NeuralNetwork:
-  SEED_RANDOMIZATION_VARIANCE = 1 / 12.0
+  SEED_RANDOMIZATION_VARIANCE = 0.25
 
   def __init__(self, layers):
     self.input = layers[0]
@@ -136,16 +136,16 @@ class NeuralNetwork:
   
   def _seed(self):
     import common
-    common.debug('SEEDING', self._seedCoefs)
-    if self._seedCoefs:
-      print(self._seedCoefs)
-      print(self.inpmax)
-      print(self.outmax)
-      coefs = self._seedCoefs * self.inpmax / self.outmax
-      print(coefs)
+    # common.debug('SEEDING', self._seedCoefs)
+    if self._seedCoefs is not None:
+      # print(self._seedCoefs)
+      # print(self.inpmax)
+      # print(self.outmax)
+      coefs = self._seedCoefs # * self.inpmax / self.outmax
+      # print(coefs)
       # print(self._layers[1].weights)
       # print(self._layers[1].weights.dot(numpy.array([1,1,1,1,1])))
-      self._layers[1].weights = self.randomizedCoefs(numpy.array(coefs), self._layers[1].getSize())
+      self._layers[1].weights = self.randomizedCoefs(coefs, self._layers[1].getSize())
       for i in range(2, len(self._layers)):
         prevSize = self._layers[i-1].getSize()
         self._layers[i].weights = self.randomizedCoefs(
@@ -154,8 +154,9 @@ class NeuralNetwork:
     # print(self.
   
   def debugWeights(self):
+    import common
     for i in range(1, len(self._layers)):
-      print(i, self._layers[i].weights)
+      common.debug(i, self._layers[i].weights)
       
   def randomizedCoefs(cls, coefs, layerSize):
     return coefs[numpy.newaxis,:] + \
@@ -167,26 +168,26 @@ class NeuralNetwork:
     import common
     common.debug('input data')
     common.debug(inputs[:5], outputs[:5])
-    self.inpmax = inputs.max(axis=0)
-    self.outmax = outputs.max()
-    inp = inputs / self.inpmax
-    out = outputs / self.outmax
+    # self.inpmax = inputs.max(axis=0)
+    # self.outmax = outputs.max()
+    # inp = inputs / self.inpmax
+    # out = outputs / self.outmax
     self._seed()
     common.debug('training data')
-    common.debug(inp[:5], out[:5])
+    common.debug(inputs[:5], outputs[:5])
     for iter in xrange(maxiter):
       for i in xrange(len(outputs)):
-        self.input.train(inp[i], out[i], rate, shout=False)
+        self.input.train(inputs[i], outputs[i], rate, shout=False)
         # raise RuntimeError
     return self.get()
   
   def get(self):
     import common
-    common.debug(self.inpmax, self.outmax)
+    # common.debug(self.inpmax, self.outmax)
     for i in range(1, len(self._layers)):
       common.debug(i, self._layers[i].weights)
-    return lambda input: self.output(input / self.inpmax) * self.outmax
-    # return self.output
+    # return lambda input: self.output(input / self.inpmax) * self.outmax
+    return self.output
       
   
 if __name__ == '__main__':

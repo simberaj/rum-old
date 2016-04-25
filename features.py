@@ -103,12 +103,8 @@ class CategoricalAggregator(Aggregator):
         self.values[id][self.translation[category]] += weight
       except TypeError: # sequence
         vals = self.values[id]
-        try:
-          for i in xrange(len(category)):
-            vals[self.translation[category[i]]] += weight[i]
-        except IndexError:
-          print(category, weight)
-          raise
+        for i in xrange(len(category)):
+          vals[self.translation[category[i]]] += weight[i]
   
   def getExtensiveIndicators(self):
     return self.outFields
@@ -154,9 +150,12 @@ class CategoryPrefixFractionAggregator(CategoryFractionAggregator):
           translateCat[key] = self.translation[self.categories[i]]
           break
     # translate all the values
-    for vals in self.values.itervalues():
+    for id in self.values:
+      oldvals = self.values[id]
+      newvals = collections.defaultdict(float)
       for key in translateCat:
-        vals[translateCat[key]] += vals[key]
+        newvals[translateCat[key]] += oldvals[key]
+      self.values[id] = newvals
     
   def add(self, id, weight, category):
     if id >= 0:
@@ -165,12 +164,8 @@ class CategoryPrefixFractionAggregator(CategoryFractionAggregator):
         self.values[id][category] += weight
       except TypeError: # sequence
         vals = self.values[id]
-        try:
-          for i in xrange(len(category)):
-            vals[category[i]] += weight[i]
-        except IndexError:
-          print(category, weight)
-          raise
+        for i in xrange(len(category)):
+          vals[category[i]] += weight[i]
       
         
 class CategoryMergingAggregator(CategoricalAggregator):
@@ -194,9 +189,11 @@ class CategoryMergingAggregator(CategoricalAggregator):
   
   def merge(self):
     merges = self.merges.items()
-    for id, vals in self.values.iteritems():
+    for id, oldvals in self.values.iteritems():
+      newvals = collections.defaultdict(float)
       for target, sources in merges:
-        vals[target] = sum(vals[source] for source in sources)
+        newvals[target] = sum(oldvals[source] for source in sources)
+      self.values[id] = newvals
   
   
 class SummarizingAggregator(Aggregator):
@@ -212,6 +209,8 @@ class SummarizingAggregator(Aggregator):
     self.values = collections.defaultdict(list)
     if self.weight:
       self.weights = collections.defaultdict(list)
+    self.sums = collections.defaultdict(lambda: collections.defaultdict(float)) # summarizing right away
+    self.lastID = None
   
   def _outputNames(self):
     names = []
@@ -220,11 +219,15 @@ class SummarizingAggregator(Aggregator):
       fldname = self.prefix + self.name + '_' + fx.__name__
       names.append(fldname)
       self.translation[fx] = fldname
+    self.transItems = self.translation.items()
     return names
   
   def add(self, id, weight, value):
     if id >= 0: # filter out non-matches from containment etc.
-      print(self.name, 'adding', id, weight, value)
+      if id != self.lastID:
+        self.summarize(self.lastID)
+        self.lastID = id
+      # print(self.name, 'adding', id, weight, value)
       try:
         for val in value:
           self.values[id].append(val)
@@ -237,20 +240,27 @@ class SummarizingAggregator(Aggregator):
           self.weights[id].append(weight)
   
   def get(self):
-    print(self.name, 'aggregating', self.values, self.weights if self.weight else None)
-    summarized = collections.defaultdict(lambda: collections.defaultdict(float))
-    fxitems = self.translation.items()
-    for id in self.values:
-      sums = summarized[id] = {}
-      vals = self.values[id]
-      if self.weight: wts = self.weights[id]
-      for fx, fld in fxitems:
-        sums[fld] = fx(vals, wts) if fx in self.weightedFunctions else fx(vals)
-    return summarized
+    # print(self.name, 'aggregating', self.values, self.weights if self.weight else None)
+    remain = list(self.values.keys())
+    for id in remain: # aggregate the remaining
+      self.summarize(id)
+    return self.sums
   
+  def summarize(self, id):
+    values = self.values[id]
+    del self.values[id]
+    if self.weight:
+      weights = self.weights[id]
+      del self.weights[id]
+    if values:
+      sumdict = collections.defaultdict(float)
+      for fx, fld in self.transItems:
+        sumdict[fld] = fx(values, weights) if fx in self.weightedFunctions else fx(values)
+      self.sums[id] = sumdict
+      
   def getExtensiveIndicators(self):
     # everything that is summed is extensive
-    return [fld for fx, fld in self.translation.iteritems() if fx in (sum, stats.wsum)]
+    return [fld for fx, fld in self.transItems if fx in (sum, stats.wsum)]
     
   
   
@@ -268,16 +278,19 @@ class FeatureExtractor(object):
     start = True
     areas = {}
     for id, weight, area, values in self.load(segments):
-      if start:
-        if isinstance(values, dict):
-          getter = lambda values, aggname: values[aggname]
-        elif hasattr(values, '__iter__') and isinstance(next(iter(values)), dict):
-          getter = lambda values, aggname: [item[aggname] for item in values]
-        else:
-          getter = lambda value, aggname: value
-        start = False
-      for agg in self.aggregators:
-        agg.add(id, weight, getter(values, agg.name))
+      try:
+        if start:
+          if isinstance(values, dict):
+            getter = lambda values, aggname: values[aggname]
+          elif hasattr(values, '__iter__') and isinstance(next(iter(values)), dict):
+            getter = lambda values, aggname: [item[aggname] for item in values]
+          else:
+            getter = lambda value, aggname: value
+          start = False
+        for agg in self.aggregators:
+          agg.add(id, weight, getter(values, agg.name))
+      except StopIteration:
+        continue
       areas[id] = area
     self.write(segments, self.normalize(self.merge(agg.get() for agg in self.aggregators), areas))
     return self.names()
@@ -348,13 +361,14 @@ class ContainmentExtractor(FeatureExtractor): # počítá vnitřky
       # add the area field from the segments
       arcpy.JoinField_management(featIdent, common.joinIDName(segments, featIdent), segments, common.ensureIDField(segments), areaFld)
       data = loaders.BasicReader(featIdent, self._slots(featIdent, segments, areaFld)).read()
+      data.sort(key=operator.itemgetter('id')) # sort by feature id so the aggregator can summarize right away
       for feat in data:
         # print(feat['id'], (1 if self.weightField is None else feat['weight'], feat))
         yield feat['id'], 1 if self.weightField is None else feat['weight'], feat['area'], feat
   
   def normalize(self, mainDict, areas):
     extensive = self.getExtensiveIndicators()
-    common.debug('normalizing', extensive)
+    # common.debug('normalizing', extensive)
     if extensive:
       for id, valueDict in mainDict.iteritems():
         for ind in extensive:
@@ -374,7 +388,7 @@ class ContainmentExtractor(FeatureExtractor): # počítá vnitřky
       slots['weight'] = self.weightField
     if areaFld is not None:
       slots['area'] = areaFld
-    common.debug(slots, common.fieldList(source))
+    # common.debug(slots, common.fieldList(source))
     return slots
 
     
@@ -497,7 +511,7 @@ class GaussianPolygonExtractor(GaussianProximityExtractor):
     self.resolution = resolution
   
   def loadSource(self):
-    with common.PathManager(self.source) as pathman:
+    with common.PathManager(self.source, shout=False) as pathman:
       if self.where:
         # common.debug(self.__class__.__name__, 'selecting where: ' + self.where)
         selection = pathman.tmpLayer()
@@ -595,7 +609,7 @@ class CalculationLayer:
     return hasattr(self, 'source')
   
   def __enter__(self):
-    self.pathman = common.PathManager(self.source)
+    self.pathman = common.PathManager(self.source, shout=False)
     self.precalculate()
   
   def __exit__(self, *args):
@@ -643,9 +657,9 @@ class CalculationLayer:
  
 class BuildingLayer(CalculationLayer):
   AREA_FIELD = 'AREA'
-  CF_FIELD = 'CF'
+  # CF_FIELD = 'CF'
   WAGNER_FIELD = 'WAG'
-  CALC_FIELDS = [AREA_FIELD, WAGNER_FIELD, CF_FIELD]
+  # CALC_FIELDS = [AREA_FIELD, WAGNER_FIELD, CF_FIELD]
   NAME = 'buildings'
 
   def __init__(self, config):
@@ -661,15 +675,15 @@ class BuildingLayer(CalculationLayer):
     self.descriptions = ['buildings', 'building proximity']
   
   def precalculate(self):
-    common.progress('creating temporary building copy')
-    tmpBuilds = self.pathman.tmpFile() # do not compromise the original file
-    arcpy.CopyFeatures_management(self.source, tmpBuilds)
+    # common.progress('creating temporary building copy')
+    # tmpBuilds = self.pathman.tmpFile() # do not compromise the original file
+    # arcpy.CopyFeatures_management(self.source, tmpBuilds)
     # extract the features from geometry
-    self.computeFootprint(tmpBuilds)
+    self.computeFootprint(self.source)
     # convert to points
     common.progress('locating buildings')
     tmpPts = self.pathman.tmpFile()
-    arcpy.FeatureToPoint_management(tmpBuilds, tmpPts, 'INSIDE')
+    arcpy.FeatureToPoint_management(self.source, tmpPts, 'INSIDE')
     # calculate and assign heights
     # tmpHeight = self.computeHeight(tmpBuilds)
     # now join the attributes to the calculated points via spatialjoin
@@ -679,7 +693,7 @@ class BuildingLayer(CalculationLayer):
     # arcpy.SpatialJoin_analysis(tmpPts, tmpHeight, calcPoints, 'JOIN_ONE_TO_ONE', 'KEEP_ALL', '', 'CLOSEST', '{} Meters'.format(self.floorTransferDist))
     # arcpy.SpatialJoin_analysis(tmpBuilds, tmpHeight, calcPolygons, 'JOIN_ONE_TO_ONE', 'KEEP_ALL', '', 'CLOSEST', '{} Meters'.format(self.floorTransferDist))
     self.extractors = [
-      PolygonInPolygonExtractor('c', tmpBuilds, self.aggregators),
+      PolygonInPolygonExtractor('c', self.source, self.aggregators),
       GaussianPointExtractor('p', tmpPts, self.aggregators, sd=self.sd)
     ]
   
@@ -693,16 +707,20 @@ class BuildingLayer(CalculationLayer):
     # arcpy.CalculateField_management(tmpFloors, 'floors', '!height! / {:f}'.format(self.floorHeight), 'PYTHON_9.3')
     # return tmpHeight
   
-  def computeFootprint(self, tmpBuilds):
+  def computeFootprint(self, source):
     common.progress('computing building footprint characteristics')
-    common.addFields(tmpBuilds, self.CALC_FIELDS, [float] * len(self.CALC_FIELDS))
+    # common.addFields(tmpBuilds, self.CALC_FIELDS, [float] * len(self.CALC_FIELDS))
     # even default fields recreated because we transfer them on to points and such
-    arcpy.CalculateField_management(tmpBuilds, self.AREA_FIELD, '!shape.area!', 'PYTHON_9.3')
-    arcpy.CalculateField_management(tmpBuilds, self.CF_FIELD, '!shape.length!', 'PYTHON_9.3')
-    arcpy.CalculateField_management(tmpBuilds, self.WAGNER_FIELD,
-        '!{0}! / (2 * math.sqrt(math.pi * !{1}!)) if !{1}! > 1e-6 else 0'.format(
-            self.CF_FIELD, self.AREA_FIELD),
-        'PYTHON_9.3') # wagner index
+    common.copyField(source, common.ensureShapeAreaField(source), self.AREA_FIELD)
+    common.calcField(source, self.WAGNER_FIELD, 
+      '!{0}! / (2 * math.sqrt(math.pi * !{1}!)) if !{1}! > 1e-6 else 0'.format(
+            common.ensureShapeLengthField(source), self.AREA_FIELD), float)
+    # arcpy.CalculateField_management(tmpBuilds, self.AREA_FIELD, '!shape.area!', 'PYTHON_9.3')
+    # arcpy.CalculateField_management(tmpBuilds, self.CF_FIELD, '!shape.length!', 'PYTHON_9.3')
+    # arcpy.CalculateField_management(tmpBuilds, self.WAGNER_FIELD,
+        # '!{0}! / (2 * math.sqrt(math.pi * !{1}!)) if !{1}! > 1e-6 else 0'.format(
+            # self.CF_FIELD, self.AREA_FIELD),
+        # 'PYTHON_9.3') # wagner index
    
 class LandUseLayer(CalculationLayer):
   NAME = 'landuse'
@@ -744,6 +762,7 @@ class TransportLayer(CalculationLayer):
   FEATURE = 'FFacc'
   AUXILIARY_LAYERS = [LandUseLayer]
   ONEWAY_FIELD = 'oneway'
+  LENGTH_FIELD = 'length'
   
   def __init__(self, config):
     self.typeField = config['type_field']
@@ -760,16 +779,21 @@ class TransportLayer(CalculationLayer):
     return [self.FEATURE]
   
   def precalculate(self):
-    common.progress('intersecting lines to routable')
-    import lines_to_routable
-    routable = self.pathman.tmpFC()
-    lines_to_routable.linesToRoutable(self.source, routable, levelFld=self.levelField, groundLevel=0, transferFlds=[self.typeField, self.ONEWAY_FIELD])
-    common.progress('intersecting with builtup areas')
-    intraroads = self.pathman.tmpFC()
-    intravilan = self.builtupBuffer(self.auxiliary[LandUseLayer.NAME])
-    arcpy.Identity_analysis(routable, intravilan, intraroads, 'ONLY_FID', self.tolerance)
-    self.calcFields(intraroads, common.joinIDName(intravilan, intraroads))
-    self.prepareNetwork(intraroads)
+    tgtDir = os.path.join(self.pathman.getFolder(), 'network')
+    if os.path.isdir(tgtDir):
+      common.message('Network dataset already exists, skipping')
+      self.net = os.path.join(tgtDir, 'rum_nd.nd')
+    else:
+      common.progress('intersecting lines to routable')
+      import lines_to_routable
+      routable = self.pathman.tmpFC()
+      lines_to_routable.linesToRoutable(self.source, routable, levelFld=self.levelField, groundLevel=0, transferFlds=[self.typeField, self.ONEWAY_FIELD])
+      common.progress('intersecting with builtup areas')
+      intraroads = self.pathman.tmpFC()
+      intravilan = self.builtupBuffer(self.auxiliary[LandUseLayer.NAME])
+      arcpy.Identity_analysis(routable, intravilan, intraroads, 'ONLY_FID', self.tolerance)
+      self.calcFields(intraroads, common.joinIDName(intravilan, intraroads))
+      self.prepareNetwork(intraroads, tgtDir)
   
   def builtupBuffer(self, lu):
     common.progress('finding builtup areas')
@@ -789,9 +813,9 @@ class TransportLayer(CalculationLayer):
     common.debug('speedDict[str(!builtup!)][!{}!]'.format(self.typeField))
     common.calcField(intravilan, 'speed', 'speedDict[str(!builtup!)][!{}!]'.format(self.typeField), float, prelogic=(u'import collections;speedDict = ' + self.speedDictStr(self.speeds)))
     common.progress('calculating length')
-    lenFld = common.ensureShapeLengthField(intravilan)
+    common.copyField(intravilan, common.ensureShapeLengthField(intravilan), self.LENGTH_FIELD)
     common.progress('calculating time')
-    common.calcField(intravilan, 'time', '!{}! / !speed! * 3.6'.format(lenFld), float)
+    common.calcField(intravilan, 'time', '!{}! / !speed! * 3.6'.format(self.LENGTH_FIELD), float)
   
   @staticmethod
   def speedDictStr(spdict):
@@ -800,21 +824,21 @@ class TransportLayer(CalculationLayer):
           '{', 'collections.defaultdict(float, {').replace(
               '}', '})') + ')')
   
-  def prepareNetwork(self, lines):
+  def prepareNetwork(self, lines, tgtDir):
     common.progress('preparing transport network')
-    srcDir = str(os.path.join(os.path.dirname(__file__), 'network'))
-    tgtDir = self.pathman.tmpSubfolder()
-    self.net = self.copyNetwork(srcDir, tgtDir, 'rum_nd')
+    os.mkdir(tgtDir)
+    self.net = self.copyNetwork(tgtDir, 'rum_nd')
     common.progress('filling transport network')
-    arcpy.Append_management(lines, common.featurePath(tgtDir, 'transport1'), 'NO_TEST')
+    arcpy.Append_management(lines, common.featurePath(tgtDir, 'transport1'),
+      'NO_TEST')
     common.progress('building transport network')
-    common.debug(self.net)
+    # common.debug(self.net)
     arcpy.BuildNetwork_na(self.net)
   
   @staticmethod
-  def copyNetwork(srcFolder, tgtFolder, ndName):
+  def copyNetwork(tgtFolder, ndName):
     # import shutil
-    srcND = os.path.join(srcFolder, ndName + '.nd')
+    srcND = os.path.join(os.path.dirname(__file__), 'network', ndName + '.nd')
     tgtND = os.path.join(tgtFolder, ndName + '.nd')
     arcpy.Copy_management(srcND, tgtND)
     return tgtND
@@ -828,13 +852,22 @@ class TransportLayer(CalculationLayer):
     
   def calculate(self, segments, points):
     import accessibility
+    common.progress('indexing inputs')
+    self.index()
+    accessibility.TOLERANCE = '200 Meters'
     accessibility.accessibility(points, self.net, 'time', accFld=self.FEATURE)
     return [], [self.FEATURE]
+  
+  def index(self):
+    wsp = common.location(self.net)
+    for fc in common.listLayers(wsp):
+      # common.debug('indexing', fc)
+      arcpy.AddSpatialIndex_management(common.featurePath(wsp, fc))
     
     
 class RasterCalculationLayer(CalculationLayer):
   def calculate(self, segments, points):
-    common.progress('extracting terrain values to points')
+    common.progress('extracting raster values to points')
     arcpy.sa.ExtractMultiValuesToPoints(points, zip(self.rasters, self.FEATURES), 'NONE')
     return [], self.FEATURES
 
@@ -866,6 +899,7 @@ class DEMLayer(RasterCalculationLayer):
   
   def precalculate(self):
     arcpy.CheckOutExtension('Spatial')
+    common.progress('calculating terrain features')
     common.progress('smoothing raster')
     smoothed = self.pathman.tmpRaster()
     arcpy.sa.FocalStatistics(self.source, arcpy.sa.NbrCircle(self.smoothing, 'MAP'), 'MEDIAN', 'DATA').save(smoothed) # smoothing in map units (meters), DATA = ignore nodata in neighbourhood
@@ -938,20 +972,27 @@ class FeatureCalculator:
       nameList.extend(layer.names())
     return nameList
 
-  def calculate(self, segments):
-    with common.PathManager(segments) as pathman:
+  def createSegmentCentroids(self, segments, centroids):
+    with common.PathManager(segments, shout=False) as pathman:
       # create representative points for extractors that operate on points
       subdiv = pathman.tmpFile()
       # common.debug(segments, common.fieldTypeList(segments), self.directFields, self.getDirectFields(segments))
       subdivide_polygons.subdivide(segments, subdiv, self.maxArea, self.maxWagner, self.minArea, self.getDirectFields(segments))
+      common.progress('creating segment centroids')
       common.clearFields(subdiv)
       common.copyField(subdiv, common.ensureShapeAreaField(subdiv), self.AREA_FIELD)
-      segmentPoints = pathman.tmpFile()
-      arcpy.FeatureToPoint_management(subdiv, segmentPoints, 'INSIDE')
-      # calculate the features
-      polyFeats, ptFeats = self._calcFeatures(segments, segmentPoints)
-      # aggregate the ptFeats from points to segments (mean, weighted by area repres. by point)
-      self.aggregate(segments, segmentPoints, ptFeats, self.AREA_FIELD)
+      arcpy.FeatureToPoint_management(subdiv, centroids, 'INSIDE')
+    
+    
+  def calculate(self, segments, centroids=None):
+    # create representative points for extractors that operate on points
+    if centroids is None:
+      centroids = createSegmentCentroids(segments,
+          common.addFeatureExt(os.path.splitext(segments)[0] + '_centroids'))
+    # calculate the features
+    polyFeats, ptFeats = self._calcFeatures(segments, centroids)
+    # aggregate the ptFeats from points to segments (mean, weighted by area repres. by point)
+    self.aggregate(segments, centroids, ptFeats)
     return polyFeats, ptFeats
       
   def _calcFeatures(self, segments, points):
@@ -968,7 +1009,10 @@ class FeatureCalculator:
         common.warning('layer {} not initialized'.format(layer.getName()))
     return polyFeats, ptFeats
   
-  def aggregate(self, segments, points, fields, weightFld):
+  @classmethod
+  def aggregate(cls, segments, points, fields=None):
+    if fields is None:
+      fields = [fld for fld in common.fieldList(points) if fld.startswith('FF')]
     # aggregate data from fields in points to segments using mean weighted by weightFld
     with common.PathManager(segments) as pathman:
       # first, find which points belong into which segment
@@ -979,17 +1023,18 @@ class FeatureCalculator:
       arcpy.SpatialJoin_analysis(points, segments, ptsIdent, 'JOIN_ONE_TO_MANY', 'KEEP_COMMON', '', 'WITHIN')
       # now load the point data in fields, the segment id and weighting area
       common.progress('aggregating neighbourhood data')
-      ptSlots = {'sid' : 'JOIN_FID', 'weight' : self.AREA_FIELD}
+      ptSlots = {'sid' : 'JOIN_FID', 'weight' : cls.AREA_FIELD}
       segSlots, segTypes = {}, {}
       for fld in fields:
         ptSlots[fld] = fld
         segSlots[fld] = fld
         segTypes[fld] = float
       ptFeats = loaders.BasicReader(ptsIdent, ptSlots).read()
-      segFeats = self.mergeToSegments(ptFeats, fields)
+      segFeats = cls.mergeToSegments(ptFeats, fields)
       loaders.ObjectMarker(segments, {'id' : segIDFld}, segSlots, {}, segTypes).mark(segFeats)
   
-  def mergeToSegments(self, ptFeats, fields):
+  @classmethod
+  def mergeToSegments(cls, ptFeats, fields):
     # common.debug(ptFeats)
     # common.debug(fields)
     segFeats = collections.defaultdict(lambda: collections.defaultdict(float))
@@ -998,21 +1043,26 @@ class FeatureCalculator:
       segID = pt['sid']
       weight = pt['weight']
       for fld in fields:
-        segFeats[segID][fld] += pt[fld] * weight
+        if pt[fld]:
+          segFeats[segID][fld] += pt[fld] * weight
       segWeightSums[segID] += weight
     for segID, seg in segFeats.iteritems():
       wtSum = segWeightSums[segID]
       for fld in fields:
         seg[fld] /= wtSum
     return segFeats
-        
+  
+  
 
 def calculate(segments, layers, config, layerClasses=None):
   if layerClasses is None:
     layerClasses = FeatureCalculator.DEFAULT_LAYERS
   calc = FeatureCalculator(layerClasses, config)
   calc.input(layers)
-  calc.calculate(segments)
+  centroids = common.addFeatureExt(os.path.splitext(segments)[0] + '_centroids')
+  if not arcpy.Exists(centroids):
+    calc.createSegmentCentroids(segments, centroids)
+  calc.calculate(segments, centroids)
   return calc.names()
     
 if __name__ == '__main__':

@@ -28,7 +28,7 @@ ORIGIN_MARKER = 'O_' # field markers for od attributes of interactions
 DESTINATION_MARKER = 'D_'
 SHAPE_KEY = 'SHAPE' # auxiliary key for shape information
 SHAPE_TYPE = 'SHAPE'
-SHAPE_LENGTH_FLD = 'Shape_Area'
+SHAPE_LENGTH_FLD = 'Shape_Length'
 SHAPE_AREA_FLD = 'Shape_Area'
 
 def checkFile(file):
@@ -287,6 +287,17 @@ def fieldMap(source, srcName, tgtName, mergeRule):
   map.outputField = outFld
   return map
 
+def multiFieldMap(sources, names, mergeRule):
+  map = arcpy.FieldMap()
+  for i in range(len(sources)):
+    map.addInputField(sources[i], names[i])
+  map.mergeRule = mergeRule
+  outFld = map.outputField
+  outFld.name = names[0]
+  outFld.alias = names[0]
+  map.outputField = outFld
+  return map
+  
   
 def getSource(layer):
   desc = arcpy.Describe(layer)
@@ -463,7 +474,8 @@ def ensureShapeAreaField(layer):
     return SHAPE_AREA_FLD
   
 def joinIDName(ofTable, inTable):
-  return fieldNameIn(inTable, 'FID_' + os.path.splitext(os.path.basename(ofTable))[0])
+  return fieldNameIn(inTable, 'FID_' + 
+    os.path.splitext(os.path.basename(toFeatureClass(ofTable)))[0])
   
 def fieldNameIn(table, name):
   if not isInDatabase(table):
@@ -717,6 +729,9 @@ class PathManager:
   
   def getLocation(self):
     return self.location
+	
+  def getFolder(self):
+    return folder(self.location)
 
   def getOutputName(self):
     return self.outName

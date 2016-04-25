@@ -13,14 +13,14 @@ def createSegments(landuse, otherFCs, codeFld, minsize, maxsize, maxwagner, outp
     # intersect everything
     common.progress('intersecting borders and barriers')
     intersected = pathman.tmpFile()
-    common.debug([landuse] + otherFCs, intersected)
+    # common.debug([landuse] + otherFCs, intersected)
     arcpy.FeatureToPolygon_management([landuse] + otherFCs, intersected, attributes='NO_ATTRIBUTES')
     # common.progress('clearing segment attributes')    
     common.clearFields(intersected)
     # select only suitable landuse
     common.progress('selecting urban landuse classes')
     inhabLU = pathman.tmpFile()
-    inhabQry = common.safeQuery("[{0}] LIKE '11%' OR [{0}] LIKE '121%' OR [{0}] LIKE '133%'".format(codeFld), landuse)
+    inhabQry = common.safeQuery("[{0}] LIKE '11%' OR [{0}] LIKE '121%'".format(codeFld), landuse)
     arcpy.Select_analysis(landuse, inhabLU, inhabQry)
     # join landuse information
     common.progress('joining landuse information')

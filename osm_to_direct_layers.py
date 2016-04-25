@@ -1,6 +1,8 @@
 from __future__ import nested_scopes, generators, division, absolute_import, with_statement, print_function, unicode_literals
 
 import json
+import os
+import sys
 
 import osm
 import geojson
@@ -44,22 +46,39 @@ def _convert(osmfile, folder, config):
   common.progress('loading layer transform configuration')
   with open(config) as conffile:
     config = json.load(conffile, encoding=DEFAULT_ENCODING)
-  transformer = transform.Transformer(config, folder)
+  transformer = transform.GeoJSONTransformer(config, folder)
   common.progress('transforming OSM to layers')
   if osmfile.endswith('osm'):
-    osmListener = geojson.Bridge(transformer)
-    osm.extract(osmfile, osmListener)
+    with transformer:
+      osmListener = geojson.Bridge(transformer)
+      osm.extract(osmfile, osmListener)
   elif osmfile.endswith('json'):
-    geojson.feed(osmfile, transformer)
+    with transformer:
+      geojson.feed(osmfile, transformer)
     
-  
+def convertParts(motherfile, folder, config, prj=None, clipping=None):
+  dirPath = os.path.abspath(os.path.dirname(motherfile))
+  mothername = os.path.splitext(os.path.basename(motherfile))[0]
+  pattern = mothername + '.part'
+  parts = [file for file in os.listdir(dirPath) if file.startswith(pattern)]
+  partDirs = [os.path.join(folder, os.path.splitext(part)[0]) for part in parts]
+  for i in range(len(parts)):
+    if not os.path.isdir(partDirs[i]):
+      os.mkdir(partDirs[i])
+    convert(os.path.join(dirPath, parts[i]), partDirs[i], config, prj, clipping)
 
 if __name__ == '__main__':
   import common
-  with common.runtool(5) as parameters:
-    # import cProfile
-    # cProfile.run('convert(*parameters)')
-    convert(*parameters)
+  with common.runtool(6) as parameters:
+    if common.toBool(parameters[5], 'use part files switch'):
+      convertParts(*parameters[:5])
+    else:
+      import cProfile
+      oldStdout = sys.stdout
+      sys.stdout = open('t:\\translog.log', 'w')
+      cProfile.run('convert(*parameters[:5])')
+      sys.stdout = oldStdout
+      # convert(*parameters[:5])
   # parser = argparse.ArgumentParser(description=DESCRIPTION)
   # parser.add_argument('osmFile', metavar='osm', type=unicode, help='an OSM file whose contents are to be translated')
   # parser.add_argument('outFolder', metavar='workspace', type=unicode, help='an ArcGIS workspace to place output and intermediary files')

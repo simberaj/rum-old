@@ -28,12 +28,12 @@ def subdivide(source, target, maxarea, maxwagner, minarea, transferFlds):
     inSlots[fld] = fld
     outSlots[fld] = fld
   ld = loaders.BasicReader(source, inSlots)
-  tosub = ld.read(text='reading features')
+  tosub = ld.read(text='reading polygons to subdivide')
   subs = list(_subdivided(tosub, maxarea, maxwagner, minarea))
   # import cProfile
   # cProfile.runctx("subs = list(_subdivided(ld.read(text='processing'), maxarea, maxwagner, minarea))", globals(), locals())
   wr = loaders.BasicWriter(target, outSlots, crs=source)
-  wr.write(subs)
+  wr.write(subs, text='writing subdivided polygons')
 
 if __name__ == '__main__':
   with common.runtool(6) as parameters:

@@ -8,11 +8,17 @@ def featureFields(layer):
   prefix = features.GLOBAL_PREFIX
   return sorted(fld for fld in fields if fld.startswith(prefix))
       
-def load(layer, slots=None, id=False, dict=False, features=True, text=''):
+def load(layer, slots=None, id=False, dict=False, features=None, text=''):
   if slots is None:
     slots = {}
-  if features:
+  if features is None:
     for feat in featureFields(layer):
+      slots[feat] = feat
+  else:
+    featFields = featureFields(layer)
+    for feat in features:
+      if feat not in featFields:
+        raise ValueError, 'feature {} from model not found'.format(feat)
       slots[feat] = feat
   if id:
     slots['id'] = common.ensureIDField(layer)
@@ -39,17 +45,20 @@ def train(model, segments, valueFld, fit=False):
   model.train()
 
 def apply(model, segments, saveFld):
-  data = load(segments, id=True, text='feature')
+  common.debug('model setup', model.getFeatureNames())
+  data = load(segments, id=True, features=model.getFeatureNames(), text='feature')
   common.progress('applying regression model')
-  model.setFeatureNames(featureFields(segments))
+  # model.setFeatureNames(featureFields(segments))
+  common.debug('MODEL FEATS', model.getFeatureNames())
   modelFX = model.get()
+  for seg in data[:5]:
+    common.debug('input', seg, model.featuresToList(seg), modelFX(model.featuresToList(seg)))
   for seg in data:
-    common.debug('input', model.featuresToList(seg))
     seg['value'] = float(modelFX(model.featuresToList(seg)))
-    common.debug('output', seg['value'])
-  common.debug(data)
+    # common.debug('output', seg['value'])
+  # common.debug(data)
   save(data, segments, {'value' : saveFld})
   
 def validate(segments, valueFld, validFld, reportFile=None):
-  data = load(segments, id=True, features=False, slots={'model' : valueFld, 'real' : validFld, 'xy' : 'shape@xy'}, text='segment')
+  data = load(segments, id=True, features=[], slots={'model' : valueFld, 'real' : validFld, 'xy' : 'shape@xy'}, text='segment')
   regression.validate(data, 'model', 'real', outfile=reportFile, shapekey='xy')

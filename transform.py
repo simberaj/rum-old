@@ -1,4 +1,5 @@
 from __future__ import nested_scopes, generators, division, absolute_import, with_statement, print_function, unicode_literals
+import os
 
 DEFAULT_ENCODING = 'utf8'
 DEBUG_SLOT = 'debug_all'
@@ -12,70 +13,6 @@ class ConfigError(Exception):
 
 class InputError(Exception):
   pass
-
-class Transformer:  
-  def __init__(self, config, outputFolder=None, debug=False):
-    self.layers = {}
-    self.commonListeners = []
-    self.geometryListeners = {geomtype : [] for geomtype in geojson.GEOMETRY_TYPES}
-    self.editor = None
-    self.debug = debug
-    self.configure(config)
-    if outputFolder:
-      self.setOutput(outputFolder)
-  
-  def setOutput(self, folder):
-    # import arcpy
-    for layer in self.layers.values():
-      layer.setOutput(folder)
-    # arcpy.env.overwriteOutput = True
-    # self.editor = arcpy.da.Editor(folder)
-  
-  # def __enter__(self):
-    # self.editor.startEditing(False, True) # no undo/redo stack, do commit at all times
-    # self.editor.startOperation()
-    # return self
-  
-  # def __exit__(self, exctype, excval, exctb):
-    # self.editor.stopOperation()
-    # self.editor.stopEditing(exctype is None)
-    
-    # print(self.commonListeners)
-    # for geomtype in self.geometryListeners:
-      # print(geomtype, self.geometryListeners[geomtype])
-    # print(self.geometryListeners)
-
-  def configure(self, config):
-    try:
-      if config['config'] != 'transformer':
-        raise ConfigError, 'configuration mismatch: transformer expected, got ' + config['config']
-      outputConfig = config['layers']
-      for outputLayerName in outputConfig.iterkeys():
-        layerConfig = outputConfig[outputLayerName]
-        outputLayer = TransformLayer(layerConfig['geometry'], outputLayerName, debug=self.debug)
-        if 'selector' in layerConfig:
-          outputLayer.setSelector(attribute.selector(layerConfig['selector']))
-        if 'attributes' in layerConfig:
-          for attrConfig in layerConfig['attributes']:
-            outputLayer.addAttribute(attribute.attribute(attrConfig))
-        # for attr in outputLayer.attrs:
-          # print(attr.name, attr.restrict)
-        self.layers[outputLayerName] = outputLayer
-        if 'input-geometries' in layerConfig:
-          for ingeom in layerConfig['input-geometries']:
-            for geojsonGeom in geojson.matchingGeometryTypes(ingeom):
-              self.geometryListeners[geojsonGeom].append(outputLayer)
-        else:
-          for listenerList in self.geometryListeners.values():
-            listenerList.append(outputLayer)
-    except KeyError, mess:
-      raise
-    self.ids = set()
-        
-  def transform(self, feature):
-    for layer in self.geometryListeners[feature['geometry']['type']]:
-      for output in layer.transform(feature):
-        yield output
 
         
 class TransformLayer(object):
@@ -94,7 +31,7 @@ class TransformLayer(object):
     self.attrs.append(attr)
   
   def setOutput(self, folder):
-    import common, loaders, os
+    import common, loaders
     slots = {loaders.SHAPE_SLOT : loaders.SHAPE_SLOT}
     types = {}
     for attr in self.attrs:
@@ -156,7 +93,98 @@ class TransformLayer(object):
         # common.debug(props)
         # common.debug(transformed)
         # raise
-      
+  
+  def exit(self):
+    pass
+        
   def __repr__(self):
     # return self.__class__.__name__ + '(' + unicode(self.selector) + ',[' + ','.join(unicode(at) for at in self.attrs) + '])'
     return self.__class__.__name__ + '(' + self.name + ')'
+  
+class GeoJSONTransformLayer(TransformLayer):
+  def setOutput(self, folder):
+    self.output = geojson.CompatibilityWriter(os.path.join(folder, self.name + '.json'),
+      fields=[attr.name for attr in self.attrs])
+    self.output.enter()
+  
+  def exit(self):
+    self.output.exit()
+
+      
+class Transformer:  
+  LAYER_CLASS = TransformLayer
+
+  def __init__(self, config, outputFolder=None, debug=False):
+    self.config = config
+    self.layers = {}
+    self.commonListeners = []
+    self.geometryListeners = {geomtype : [] for geomtype in geojson.GEOMETRY_TYPES}
+    self.editor = None
+    self.debug = debug
+    self.configure(config)
+    if outputFolder:
+      self.setOutput(outputFolder)
+  
+  def copy(self, folder):
+    return Transformer(self.config, folder, debug=self.debug)
+  
+  def setOutput(self, folder):
+    # import arcpy
+    for layer in self.layers.values():
+      layer.setOutput(folder)
+    # arcpy.env.overwriteOutput = True
+    # self.editor = arcpy.da.Editor(folder)
+  
+  def __enter__(self):
+    # self.editor.startEditing(False, True) # no undo/redo stack, do commit at all times
+    # self.editor.startOperation()
+    return self
+  
+  def __exit__(self, exctype, excval, exctb):
+    for layer in self.layers.values():
+      layer.exit()
+    # self.editor.stopOperation()
+    # self.editor.stopEditing(exctype is None)
+    
+    # print(self.commonListeners)
+    # for geomtype in self.geometryListeners:
+      # print(geomtype, self.geometryListeners[geomtype])
+    # print(self.geometryListeners)
+
+  def configure(self, config):
+    try:
+      if config['config'] != 'transformer':
+        raise ConfigError, 'configuration mismatch: transformer expected, got ' + config['config']
+      outputConfig = config['layers']
+      for outputLayerName in outputConfig.iterkeys():
+        layerConfig = outputConfig[outputLayerName]
+        outputLayer = self.LAYER_CLASS(layerConfig['geometry'], outputLayerName, debug=self.debug)
+        if 'selector' in layerConfig:
+          outputLayer.setSelector(attribute.selector(layerConfig['selector']))
+        if 'attributes' in layerConfig:
+          for attrConfig in layerConfig['attributes']:
+            outputLayer.addAttribute(attribute.attribute(attrConfig))
+        # for attr in outputLayer.attrs:
+          # print(attr.name, attr.restrict)
+        self.layers[outputLayerName] = outputLayer
+        if 'input-geometries' in layerConfig:
+          for ingeom in layerConfig['input-geometries']:
+            for geojsonGeom in geojson.matchingGeometryTypes(ingeom):
+              self.geometryListeners[geojsonGeom].append(outputLayer)
+        else:
+          for listenerList in self.geometryListeners.values():
+            listenerList.append(outputLayer)
+    except KeyError, mess:
+      raise
+    self.ids = set()
+        
+  def transform(self, feature):
+    for layer in self.geometryListeners[feature['geometry']['type']]:
+      for output in layer.transform(feature):
+        yield output
+
+      
+class GeoJSONTransformer(Transformer):
+  LAYER_CLASS = GeoJSONTransformLayer
+     
+      
