@@ -95,9 +95,10 @@ If you do not have the `.mod` file you need, you can create it using the trainin
 you have. Use the `0 - Training` toolset for that - the tool `0 - Train Model` does it all in one step.
 
 For Model Type, use either:
-- OLS for [Ordinary Least Squares](https://en.wikipedia.org/wiki/Ordinary_least_squares) estimation, or
+- OLS for [Ordinary Least Squares](https://en.wikipedia.org/wiki/Ordinary_least_squares) estimation,
+- ARD for [Sparse Bayesian Modeling](http://www.miketipping.com/sparsebayes.htm), an extension of OLS minimizing overfitting, or
 - GR for [General Regression](http://research.vuse.vanderbilt.edu/vuwal/paul/paper/references/grnn.pdf)
-  which is generally more precise.
+  which is generally the most precise.
   
 #### Training data
 The training data should capture the spatial distribution of the particular indicator that you wish to model
